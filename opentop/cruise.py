@@ -209,6 +209,23 @@ class Cruise(Base):
             L_max = cl_max * 0.5 * rho * v**2 * S
             opti.subject_to(L_max * 0.8 >= mass * oc.aero.g0)
 
+        # Performance constraints at terminal state
+        S = self.aircraft["wing"]["area"]
+        mass_f = X[-1][3]
+        v_f = oc.aero.mach2tas(U[-1][0], X[-1][2], dT=self.dT)
+        tas_f = v_f / kts
+        alt_f = X[-1][2] / ft
+        rho_f = oc.aero.density(X[-1][2], dT=self.dT)
+        thrust_max_f = self.thrust.cruise(tas_f, alt_f, dT=self.dT)
+        opti.subject_to(thrust_max_f * 0.95 >= self.drag.clean(mass_f, tas_f, alt_f, dT=self.dT))
+        cd0 = self.drag.polar["clean"]["cd0"]
+        ck = self.drag.polar["clean"]["k"]
+        drag_max_f = thrust_max_f * 0.9
+        cd_max_f = drag_max_f / (0.5 * rho_f * v_f**2 * S + 1e-10)
+        cl_max_f = ca.sqrt(ca.fmax(1e-10, (cd_max_f - cd0) / ck))
+        L_max_f = cl_max_f * 0.5 * rho_f * v_f**2 * S
+        opti.subject_to(L_max_f * 0.8 >= mass_f * oc.aero.g0)
+
         # ts and dt consistency
         for k in range(self.nodes - 1):
             opti.subject_to(opti.bounded(-1, X[k + 1][4] - X[k][4] - self.dt, 1))  # type: ignore[arg-type]  # CasADi stubs wrong: bounded(float, expr, float) is valid
@@ -218,6 +235,10 @@ class Cruise(Base):
             opti.subject_to(
                 opti.bounded(-15 * pi / 180, U[k + 1][2] - U[k][2], 15 * pi / 180)  # type: ignore[arg-type]  # CasADi stubs wrong
             )
+
+        # Smooth vertical rate change
+        for k in range(self.nodes - 1):
+            opti.subject_to(opti.bounded(-500 * fpm, U[k + 1][1] - U[k][1], 500 * fpm))
 
         # Optional constraints
         if self.fix_mach:
