@@ -194,7 +194,7 @@ class Cruise(Base):
             v = oc.aero.mach2tas(U[k][0], X[k][2], dT=self.dT)
             tas = v / kts
             alt = X[k][2] / ft
-            thrust_max = self.thrust.cruise(tas, alt, dT=self.dT)
+            thrust_max = self._thrust_climb(tas, alt)
             self._constrain_clean_performance(opti, mass, tas, alt, thrust_max)
 
         # ts and dt consistency

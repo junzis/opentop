@@ -90,9 +90,24 @@ def build_performance_models(
             aircraft=aircraft,
             engtype=engtype,
             engine=None,
-            thrust=bada3.Thrust(actype, bada_path=bada_path, backend=backend),
-            drag=bada3.Drag(actype, bada_path=bada_path, backend=backend),
-            fuelflow=bada3.FuelFlow(actype, bada_path=bada_path, backend=backend),
+            thrust=bada3.Thrust(
+                actype,
+                bada_path=bada_path,
+                backend=backend,
+                smooth=symbolic,
+            ),
+            drag=bada3.Drag(
+                actype,
+                bada_path=bada_path,
+                backend=backend,
+                smooth=symbolic,
+            ),
+            fuelflow=bada3.FuelFlow(
+                actype,
+                bada_path=bada_path,
+                backend=backend,
+                smooth=symbolic,
+            ),
             emission=emission,
         )
 
@@ -103,9 +118,24 @@ def build_performance_models(
         aircraft=aircraft,
         engtype=engtype,
         engine=None,
-        thrust=bada4.Thrust(actype, bada_path=bada_path, backend=backend),
-        drag=bada4.Drag(actype, bada_path=bada_path, backend=backend),
-        fuelflow=bada4.FuelFlow(actype, bada_path=bada_path, backend=backend),
+        thrust=bada4.Thrust(
+            actype,
+            bada_path=bada_path,
+            backend=backend,
+            smooth=symbolic,
+        ),
+        drag=bada4.Drag(
+            actype,
+            bada_path=bada_path,
+            backend=backend,
+            smooth=symbolic,
+        ),
+        fuelflow=bada4.FuelFlow(
+            actype,
+            bada_path=bada_path,
+            backend=backend,
+            smooth=symbolic,
+        ),
         emission=emission,
     )
 

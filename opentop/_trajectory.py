@@ -59,21 +59,19 @@ def to_dataframe(
 
     Returns:
         (df, X, U, dt): the trajectory DataFrame plus the state array (with
-        the extrapolated terminal control appended to ``U``) and the segment
-        duration ``dt = ts_final / nodes``. The caller assigns these back onto
-        the Base instance to preserve historical side-effect semantics.
+        the final interval control repeated at the terminal state) and the
+        segment duration ``dt = ts_final / nodes``. The caller assigns these
+        back onto the Base instance to preserve historical side-effect semantics.
     """
     n_dim = _objectives._infer_grid_n_dim(interpolant, n_dim)
 
     X = x_opt if isinstance(x_opt, np.ndarray) else x_opt.full()
     U = u_opt if isinstance(u_opt, np.ndarray) else u_opt.full()
 
-    # Extrapolate the final control point, Uf
-    U2 = U[:, -2:-1]
-    U1 = U[:, -1:]
-    Uf = U1 + (U1 - U2)
-
-    U = np.append(U, Uf, axis=1)
+    # Controls are defined per interval. Repeat the final optimized interval
+    # control for the terminal state so reported profiles do not display a
+    # fabricated control value outside the NLP bounds.
+    U = np.append(U, U[:, -1:], axis=1)
     n = nodes + 1
 
     dt = ts_final / (n - 1)

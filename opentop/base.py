@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
 
 class Base:
+    BADA4_MIN_FUELFLOW_KG_S: ClassVar[float] = 0.05
+
     # Attributes set by subclass init_conditions — declared here for pyright.
     # Runtime values are always assigned before _build_opti is called.
     x_lb: list
@@ -482,6 +484,7 @@ class Base:
                     xpc = xpc + C[r + 1, j] * Xc[r]
 
                 fj, qj = self.func_dynamics(Xc[j - 1], Uk)  # type: ignore[misc]  # CasADi Function.__call__ return is opaque to pyright
+                self._constrain_performance_model_domain(fj)
                 self._opti.subject_to(self.dt * fj == xpc)
 
                 Xk_end = Xk_end + D[j] * Xc[j - 1]
@@ -525,6 +528,17 @@ class Base:
         self._opti.minimize(J)
 
         return X, U
+
+    def _constrain_performance_model_domain(self, xdot: ca.MX) -> None:
+        """Keep symbolic dynamics inside model-valid regions.
+
+        BADA4 fuel-flow polynomials can become negative at low-Mach/high-altitude
+        states. The mass derivative is ``-fuel_flow`` in kg/s, so constraining
+        ``-xdot[3]`` at collocation points prevents IPOPT from exploiting those
+        nonphysical regions in both dynamics and objective integration.
+        """
+        if self.performance_model == "bada4":
+            self._opti.subject_to(-xdot[3] >= self.BADA4_MIN_FUELFLOW_KG_S)
 
     def _solve(self, X, U, **kwargs):
         """Solve the Opti NLP and extract trajectory DataFrame.

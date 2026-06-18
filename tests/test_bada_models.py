@@ -2,8 +2,9 @@
 
 import os
 
+import casadi as ca
 import pytest
-from openap.aero import ft
+from openap.aero import fpm, ft
 
 import numpy as np
 import opentop as top
@@ -63,6 +64,77 @@ def test_build_bada4_performance_models():
     assert hasattr(bundle.thrust, "takeoff")
     assert hasattr(bundle.drag, "clean_drag_polar_params")
     assert hasattr(bundle.fuelflow, "enroute")
+
+
+def test_bada4_domain_guard_constrains_positive_fuel_flow():
+    opt = top.Cruise(
+        "A320-214",
+        "EHAM",
+        "EDDF",
+        0.85,
+        performance_model="bada4",
+        bada_path=BADA4_PATH,
+    )
+    opt._opti = ca.Opti()
+    opt._constrain_performance_model_domain(opt._opti.variable(5))
+
+    assert opt._opti.g.shape == (1, 1)
+
+
+def test_bada4_complete_flight_uses_clean_mach_domain():
+    opt = top.CompleteFlight(
+        "A320-214",
+        (0.0, 0.0),
+        (0.0, 1.0),
+        0.85,
+        performance_model="bada4",
+        bada_path=BADA4_PATH,
+    )
+    opt.init_conditions()
+
+    assert opt.u_0_lb[0] == 0.3
+    assert opt.u_f_lb[0] == 0.3
+    assert opt.u_lb[0] == 0.3
+
+
+def test_bada4_complete_flight_tightens_cruise_vertical_rate_domain():
+    bada4_opt = top.CompleteFlight(
+        "A320-214",
+        (0.0, 0.0),
+        (0.0, 1.0),
+        0.85,
+        performance_model="bada4",
+        bada_path=BADA4_PATH,
+    )
+    openap_opt = top.CompleteFlight("A320", (0.0, 0.0), (0.0, 1.0), 0.85)
+
+    assert bada4_opt._cruise_vertical_rate_limit() == pytest.approx(100 * fpm)
+    assert openap_opt._cruise_vertical_rate_limit() == pytest.approx(500 * fpm)
+
+
+def test_bada4_complete_flight_uses_procedural_cruise_speed_domain():
+    bada4_opt = top.CompleteFlight(
+        "A320-214",
+        (0.0, 0.0),
+        (0.0, 1.0),
+        0.85,
+        performance_model="bada4",
+        bada_path=BADA4_PATH,
+    )
+    openap_opt = top.CompleteFlight("A320", (0.0, 0.0), (0.0, 1.0), 0.85)
+
+    assert bada4_opt._cruise_mach_min() == 0.72
+    assert bada4_opt._mach_change_limit() == 0.08
+    assert openap_opt._cruise_mach_min() is None
+    assert openap_opt._mach_change_limit() == 0.2
+
+
+def test_openap_domain_guard_does_not_add_constraints():
+    opt = top.Cruise("A320", "EHAM", "EDDF", 0.85)
+    opt._opti = ca.Opti()
+    opt._constrain_performance_model_domain(opt._opti.variable(5))
+
+    assert opt._opti.g.shape == (0, 1)
 
 
 def test_bada_model_requires_bada_path():
