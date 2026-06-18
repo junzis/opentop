@@ -187,9 +187,7 @@ def test_phase_constructors_accept_bada3_model(phase_cls):
         ("A320-214", "bada4", BADA4_PATH),
     ],
 )
-def test_cruise_fuel_optimization_with_bada_model(
-    actype, performance_model, bada_path
-):
+def test_cruise_fuel_optimization_with_bada_model(actype, performance_model, bada_path):
     opt = top.Cruise(
         actype,
         "EHAM",

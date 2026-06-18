@@ -197,9 +197,7 @@ class CompleteFlight(Base):
             tas = v / kts
             alt = X[k][2] / ft
             thrust_max = self._thrust_climb(tas, alt)
-            drag = self._constrain_clean_performance(
-                opti, mass, tas, alt, thrust_max
-            )
+            drag = self._constrain_clean_performance(opti, mass, tas, alt, thrust_max)
 
             # Excess energy > change in potential energy
             excess_energy = (thrust_max - drag) * v - mass * oc.aero.g0 * U[k][1]
