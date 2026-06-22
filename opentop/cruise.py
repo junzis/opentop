@@ -33,6 +33,7 @@ class Cruise(Base):
         *,
         h_min: float | None = None,
         h_max: float | None = None,
+        payload: float | None = None,
     ) -> None:
         super().__init__(
             actype,
@@ -44,6 +45,7 @@ class Cruise(Base):
             dT=dT,
             performance_model=performance_model,
             bada_path=bada_path,
+            payload=payload,
         )
 
         self.fix_mach = False
@@ -93,16 +95,16 @@ class Cruise(Base):
         psi = self._compute_bearing_psi()
 
         # Initial conditions - Lower upper bounds
-        self.x_0_lb = [xp_0, yp_0, h_min, self.mass_init, ts_min]
-        self.x_0_ub = [xp_0, yp_0, h_max, self.mass_init, ts_min]
+        self.x_0_lb = [xp_0, yp_0, h_min, self.mass_init_lb, ts_min]
+        self.x_0_ub = [xp_0, yp_0, h_max, self.mass_init_ub, ts_min]
 
         # Final conditions - Lower and upper bounds
-        self.x_f_lb = [xp_f, yp_f, h_min, self.oew, ts_min]
-        self.x_f_ub = [xp_f, yp_f, h_max, self.mass_init, ts_max]
+        self.x_f_lb = [xp_f, yp_f, h_min, self.mass_min, ts_min]
+        self.x_f_ub = [xp_f, yp_f, h_max, self.mass_init_ub, ts_max]
 
         # States - Lower and upper bounds
-        self.x_lb = [x_min, y_min, h_min, self.oew, ts_min]
-        self.x_ub = [x_max, y_max, h_max, self.mass_init, ts_max]
+        self.x_lb = [x_min, y_min, h_min, self.mass_min, ts_min]
+        self.x_ub = [x_max, y_max, h_max, self.mass_init_ub, ts_max]
 
         # Control init - lower and upper bounds
         self.u_0_lb = [0.5, -500 * fpm, psi - pi / 4]
@@ -243,8 +245,10 @@ class Cruise(Base):
 
         if df is not None:
             final_mass = df.mass.iloc[-1]
-            if final_mass < self.oew:
-                warnings.warn("final mass condition violated (smaller than OEW).")
+            if final_mass < self.mass_min - self.MASS_CONSTRAINT_TOL_KG:
+                warnings.warn(
+                    "final mass condition violated (smaller than minimum mass)."
+                )
                 df = None
 
         if return_failed:
