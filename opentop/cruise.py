@@ -4,8 +4,8 @@ import warnings
 from math import pi
 from typing import TYPE_CHECKING, Any, Callable
 
-import casadi as ca
 import openap.casadi as oc
+from casadi import fmax, sqrt
 from openap.aero import fpm, ft, kts
 
 import pandas as pd
@@ -205,7 +205,7 @@ class Cruise(Base):
             ck = self.drag.polar["clean"]["k"]
             drag_max = thrust_max * 0.9
             cd_max = drag_max / (0.5 * rho * v**2 * S + 1e-10)
-            cl_max = ca.sqrt(ca.fmax(1e-10, (cd_max - cd0) / ck))
+            cl_max = sqrt(fmax(1e-10, (cd_max - cd0) / ck))
             L_max = cl_max * 0.5 * rho * v**2 * S
             opti.subject_to(L_max * 0.8 >= mass * oc.aero.g0)
 
@@ -224,7 +224,7 @@ class Cruise(Base):
         ck = self.drag.polar["clean"]["k"]
         drag_max_f = thrust_max_f * 0.9
         cd_max_f = drag_max_f / (0.5 * rho_f * v_f**2 * S + 1e-10)
-        cl_max_f = ca.sqrt(ca.fmax(1e-10, (cd_max_f - cd0) / ck))
+        cl_max_f = sqrt(fmax(1e-10, (cd_max_f - cd0) / ck))
         L_max_f = cl_max_f * 0.5 * rho_f * v_f**2 * S
         opti.subject_to(L_max_f * 0.8 >= mass_f * oc.aero.g0)
 
