@@ -72,7 +72,10 @@ def obj_fuel(
         )
         v = openap.aero.mach2tas(mach, h, dT=dT)  # type: ignore[arg-type]
 
-    ff = ff_model.enroute(m, v / kts, h / ft, vs / fpm, dT=dT)
+    if performance_model == "openap":
+        ff = ff_model.enroute(m, v / kts, h / ft, vs / fpm, dT=dT)
+    else:
+        ff = ff_model.enroute(m, v / kts, h / ft, vs / fpm)
     return ff * dt  # type: ignore[return-value]  # casadi arithmetic result is MX at NLP time
 
 
