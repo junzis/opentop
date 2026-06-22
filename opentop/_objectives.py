@@ -22,6 +22,7 @@ from openap.aero import fpm, ft, kts
 
 import numpy as np
 
+from ._performance import build_numeric_fuelflow
 from ._types import ObjectiveFn, Symbolic
 
 
@@ -44,6 +45,8 @@ def obj_fuel(
     actype: str,
     engtype: str,
     use_synonym: bool,
+    performance_model: str = "openap",
+    bada_path: str | None = None,
     symbolic: bool = True,
     **kwargs: Any,
 ) -> ca.MX:
@@ -60,11 +63,12 @@ def obj_fuel(
         ff_model = fuelflow
         v = oc.aero.mach2tas(mach, h, dT=dT)  # type: ignore[arg-type]  # openap stubs say int, float/symbolic works
     else:
-        ff_model = openap.FuelFlow(
+        ff_model = build_numeric_fuelflow(
             actype,
-            engtype,
+            engtype=engtype,
             use_synonym=use_synonym,
-            force_engine=True,
+            performance_model=performance_model,
+            bada_path=bada_path,
         )
         v = openap.aero.mach2tas(mach, h, dT=dT)  # type: ignore[arg-type]
 

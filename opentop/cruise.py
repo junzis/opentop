@@ -5,7 +5,6 @@ from math import pi
 from typing import TYPE_CHECKING, Any, Callable
 
 import openap.casadi as oc
-from casadi import fmax, sqrt
 from openap.aero import fpm, ft, kts
 
 import pandas as pd
@@ -29,6 +28,8 @@ class Cruise(Base):
         engine: str | None = None,
         use_synonym: bool = False,
         dT: float = 0.0,
+        performance_model: str = "openap",
+        bada_path: str | None = None,
         *,
         h_min: float | None = None,
         h_max: float | None = None,
@@ -41,6 +42,8 @@ class Cruise(Base):
             engine=engine,
             use_synonym=use_synonym,
             dT=dT,
+            performance_model=performance_model,
+            bada_path=bada_path,
         )
 
         self.fix_mach = False
@@ -187,46 +190,19 @@ class Cruise(Base):
 
         # Aircraft performance constraints
         for k in range(self.nodes):
-            S = self.aircraft["wing"]["area"]
             mass = X[k][3]
             v = oc.aero.mach2tas(U[k][0], X[k][2], dT=self.dT)
             tas = v / kts
             alt = X[k][2] / ft
-            rho = oc.aero.density(X[k][2], dT=self.dT)
-            thrust_max = self.thrust.cruise(tas, alt, dT=self.dT)
+            thrust_max = self._thrust_climb(tas, alt)
+            self._constrain_clean_performance(opti, mass, tas, alt, thrust_max)
 
-            # max_thrust * 95% > drag
-            opti.subject_to(
-                thrust_max * 0.95 >= self.drag.clean(mass, tas, alt, dT=self.dT)
-            )
-
-            # max lift * 80% > weight
-            cd0 = self.drag.polar["clean"]["cd0"]
-            ck = self.drag.polar["clean"]["k"]
-            drag_max = thrust_max * 0.9
-            cd_max = drag_max / (0.5 * rho * v**2 * S + 1e-10)
-            cl_max = sqrt(fmax(1e-10, (cd_max - cd0) / ck))
-            L_max = cl_max * 0.5 * rho * v**2 * S
-            opti.subject_to(L_max * 0.8 >= mass * oc.aero.g0)
-
-        # Performance constraints at terminal state
-        S = self.aircraft["wing"]["area"]
-        mass_f = X[-1][3]
+        # Performance constraints
         v_f = oc.aero.mach2tas(U[-1][0], X[-1][2], dT=self.dT)
         tas_f = v_f / kts
         alt_f = X[-1][2] / ft
-        rho_f = oc.aero.density(X[-1][2], dT=self.dT)
         thrust_max_f = self.thrust.cruise(tas_f, alt_f, dT=self.dT)
-        opti.subject_to(
-            thrust_max_f * 0.95 >= self.drag.clean(mass_f, tas_f, alt_f, dT=self.dT)
-        )
-        cd0 = self.drag.polar["clean"]["cd0"]
-        ck = self.drag.polar["clean"]["k"]
-        drag_max_f = thrust_max_f * 0.9
-        cd_max_f = drag_max_f / (0.5 * rho_f * v_f**2 * S + 1e-10)
-        cl_max_f = sqrt(fmax(1e-10, (cd_max_f - cd0) / ck))
-        L_max_f = cl_max_f * 0.5 * rho_f * v_f**2 * S
-        opti.subject_to(L_max_f * 0.8 >= mass_f * oc.aero.g0)
+        self._constrain_clean_performance(opti, X[-1][3], tas_f, alt_f, thrust_max_f)
 
         # ts and dt consistency
         for k in range(self.nodes - 1):

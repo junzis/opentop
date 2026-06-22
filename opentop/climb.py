@@ -30,6 +30,8 @@ class Climb(Base):
         engine: str | None = None,
         use_synonym: bool = False,
         dT: float = 0.0,
+        performance_model: str = "openap",
+        bada_path: str | None = None,
     ) -> None:
         """Climb phase trajectory optimizer.
 
@@ -41,6 +43,8 @@ class Climb(Base):
             engine: Engine type override. Defaults to aircraft default.
             use_synonym: Use aircraft type synonym. Default False.
             dT: ISA temperature deviation (K). Default 0.
+            performance_model: Performance model name: "openap", "bada3", or "bada4".
+            bada_path: Path to BADA data when using BADA performance models.
         """
         super().__init__(
             actype,
@@ -50,6 +54,8 @@ class Climb(Base):
             engine=engine,
             use_synonym=use_synonym,
             dT=dT,
+            performance_model=performance_model,
+            bada_path=bada_path,
         )
         self.cruise = Cruise(
             actype,
@@ -59,6 +65,8 @@ class Climb(Base):
             engine=engine,
             use_synonym=use_synonym,
             dT=dT,
+            performance_model=performance_model,
+            bada_path=bada_path,
         )
 
     def init_conditions(
@@ -204,7 +212,7 @@ class Climb(Base):
             vk1 = oc.aero.mach2tas(U[k + 1][0], hk1, dT=self.dT)
             dvdt = (vk1 - vk) / self.dt
             dhdt = (hk1 - hk) / self.dt
-            thrust_max = self.thrust.climb(0, hk / ft, 0, dT=self.dT)
+            thrust_max = self._thrust_climb(vk / kts, hk / ft)
             drag = self.drag.clean(X[k][3], vk / kts, hk / ft, dT=self.dT)
             opti.subject_to(
                 (thrust_max - drag) / X[k][3] - oc.aero.g0 / vk * dhdt - dvdt >= 0

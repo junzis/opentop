@@ -6,7 +6,6 @@ import warnings
 from math import pi
 from typing import TYPE_CHECKING, Any, Callable
 
-import casadi as ca
 import openap.casadi as oc
 from openap.aero import fpm, ft, kts
 
@@ -31,6 +30,8 @@ class CompleteFlight(Base):
         engine: str | None = None,
         use_synonym: bool = False,
         dT: float = 0.0,
+        performance_model: str = "openap",
+        bada_path: str | None = None,
     ) -> None:
         super().__init__(
             actype,
@@ -40,6 +41,8 @@ class CompleteFlight(Base):
             engine=engine,
             use_synonym=use_synonym,
             dT=dT,
+            performance_model=performance_model,
+            bada_path=bada_path,
         )
 
     def init_conditions(self, **kwargs: Any) -> None:
@@ -57,6 +60,7 @@ class CompleteFlight(Base):
         h_min = 100 * ft
 
         psi = self._compute_bearing_psi()
+        min_mach = 0.3 if self.performance_model == "bada4" else 0.1
 
         # Initial conditions - Lower upper bounds
         self.x_0_lb = [xp_0, yp_0, h_min, self.mass_init, ts_min]
@@ -71,15 +75,15 @@ class CompleteFlight(Base):
         self.x_ub = [x_max, y_max, h_max, self.mass_init, ts_max]
 
         # Control init - lower and upper bounds
-        self.u_0_lb = [0.1, 500 * fpm, psi]
+        self.u_0_lb = [min_mach, 500 * fpm, psi]
         self.u_0_ub = [0.3, 2500 * fpm, psi]
 
         # Control final - lower and upper bounds
-        self.u_f_lb = [0.1, -1500 * fpm, psi]
+        self.u_f_lb = [min_mach, -1500 * fpm, psi]
         self.u_f_ub = [0.3, -300 * fpm, psi]
 
         # Control - Lower and upper bound
-        self.u_lb = [0.1, -2500 * fpm, psi - pi / 2]
+        self.u_lb = [min_mach, -2500 * fpm, psi - pi / 2]
         self.u_ub = [self.mach_max, 2500 * fpm, psi + pi / 2]
 
         # Initial guess for the states
@@ -87,6 +91,24 @@ class CompleteFlight(Base):
 
         # Control - guesses
         self.u_guess = [0.6, 1000 * fpm, psi]
+
+    def _cruise_vertical_rate_limit(self) -> float:
+        """Return cruise vertical-rate limit in m/s."""
+        if self.performance_model == "bada4":
+            return 100 * fpm
+        return 500 * fpm
+
+    def _cruise_mach_min(self) -> float | None:
+        """Return model-specific minimum cruise Mach, if any."""
+        if self.performance_model == "bada4":
+            return 0.72
+        return None
+
+    def _mach_change_limit(self) -> float:
+        """Return per-node Mach-change limit."""
+        if self.performance_model == "bada4":
+            return 0.08
+        return 0.2
 
     def trajectory(
         self,
@@ -149,12 +171,18 @@ class CompleteFlight(Base):
             max_descent_range = 300_000
             idx_toc = int(max_climb_range / dd)
             idx_tod = int((self.range - max_descent_range) / dd)
+            cruise_vs_limit = self._cruise_vertical_rate_limit()
+            cruise_mach_min = self._cruise_mach_min()
 
             for k in range(idx_toc, idx_tod):
                 # Limit vertical rate during cruise
-                opti.subject_to(opti.bounded(-500 * fpm, U[k][1], 500 * fpm))  # type: ignore[arg-type]  # CasADi stubs wrong: bounded(float, expr, float) is valid
+                opti.subject_to(
+                    opti.bounded(-cruise_vs_limit, U[k][1], cruise_vs_limit)  # type: ignore[arg-type]  # CasADi stubs wrong: bounded(float, expr, float) is valid
+                )
                 # Minimum cruise alt FL150
                 opti.subject_to(X[k][2] >= 15000 * ft)
+                if cruise_mach_min is not None:
+                    opti.subject_to(U[k][0] >= cruise_mach_min)
 
             for k in range(0, idx_toc):
                 opti.subject_to(U[k][1] >= 0)
@@ -164,26 +192,12 @@ class CompleteFlight(Base):
 
         # Force and energy constraints
         for k in range(self.nodes):
-            S = self.aircraft["wing"]["area"]
             mass = X[k][3]
             v = oc.aero.mach2tas(U[k][0], X[k][2], dT=self.dT)
             tas = v / kts
             alt = X[k][2] / ft
-            rho = oc.aero.density(X[k][2], dT=self.dT)
-            thrust_max = self.thrust.cruise(tas, alt, dT=self.dT)
-            drag = self.drag.clean(mass, tas, alt, dT=self.dT)
-
-            # max_thrust > drag (5% margin)
-            opti.subject_to(thrust_max * 0.95 >= drag)
-
-            # max lift * 80% > weight
-            cd0 = self.drag.polar["clean"]["cd0"]
-            ck = self.drag.polar["clean"]["k"]
-            drag_max = thrust_max * 0.9
-            cd_max = drag_max / (0.5 * rho * v**2 * S + 1e-10)
-            cl_max = ca.sqrt(ca.fmax(1e-10, (cd_max - cd0) / ck))
-            L_max = cl_max * 0.5 * rho * v**2 * S
-            opti.subject_to(L_max * 0.8 >= mass * oc.aero.g0)
+            thrust_max = self._thrust_climb(tas, alt)
+            drag = self._constrain_clean_performance(opti, mass, tas, alt, thrust_max)
 
             # Excess energy > change in potential energy
             excess_energy = (thrust_max - drag) * v - mass * oc.aero.g0 * U[k][1]
@@ -194,8 +208,12 @@ class CompleteFlight(Base):
             opti.subject_to(opti.bounded(-1, X[k + 1][4] - X[k][4] - self.dt, 1))  # type: ignore[arg-type]  # CasADi stubs wrong
 
         # Smooth Mach number change
+        mach_change_limit = self._mach_change_limit()
         for k in range(self.nodes - 1):
-            opti.subject_to(opti.bounded(-0.2, U[k + 1][0] - U[k][0], 0.2))  # type: ignore[arg-type]  # CasADi stubs wrong
+            mach_delta = U[k + 1][0] - U[k][0]
+            opti.subject_to(
+                opti.bounded(-mach_change_limit, mach_delta, mach_change_limit)  # type: ignore[arg-type]  # CasADi stubs wrong
+            )
 
         # Smooth vertical rate change
         for k in range(self.nodes - 1):

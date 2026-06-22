@@ -3,7 +3,6 @@ from __future__ import annotations
 from math import pi
 from typing import TYPE_CHECKING, Any, Callable
 
-import casadi as ca
 import openap.casadi as oc
 from openap.aero import fpm, ft, kts
 
@@ -30,6 +29,8 @@ class Descent(Base):
         engine: str | None = None,
         use_synonym: bool = False,
         dT: float = 0.0,
+        performance_model: str = "openap",
+        bada_path: str | None = None,
     ) -> None:
         super().__init__(
             actype,
@@ -39,6 +40,8 @@ class Descent(Base):
             engine=engine,
             use_synonym=use_synonym,
             dT=dT,
+            performance_model=performance_model,
+            bada_path=bada_path,
         )
         self.cruise = Cruise(
             actype,
@@ -48,6 +51,8 @@ class Descent(Base):
             engine=engine,
             use_synonym=use_synonym,
             dT=dT,
+            performance_model=performance_model,
+            bada_path=bada_path,
         )
 
     def init_conditions(
@@ -205,26 +210,12 @@ class Descent(Base):
 
         # Force and energy constraints
         for k in range(self.nodes):
-            S = self.aircraft["wing"]["area"]
             mass = X[k][3]
             v = oc.aero.mach2tas(U[k][0], X[k][2], dT=self.dT)
             tas = v / kts
             alt = X[k][2] / ft
-            rho = oc.aero.density(X[k][2], dT=self.dT)
             thrust_max = self.thrust.cruise(tas, alt, dT=self.dT)
-            drag = self.drag.clean(mass, tas, alt, dT=self.dT)
-
-            # max_thrust > drag (5% margin)
-            opti.subject_to(thrust_max * 0.95 >= drag)
-
-            # max lift * 80% > weight
-            cd0 = self.drag.polar["clean"]["cd0"]
-            ck = self.drag.polar["clean"]["k"]
-            drag_max = thrust_max * 0.9
-            cd_max = drag_max / (0.5 * rho * v**2 * S + 1e-10)
-            cl_max = ca.sqrt(ca.fmax(1e-10, (cd_max - cd0) / ck))
-            L_max = cl_max * 0.5 * rho * v**2 * S
-            opti.subject_to(L_max * 0.8 >= mass * oc.aero.g0)
+            drag = self._constrain_clean_performance(opti, mass, tas, alt, thrust_max)
 
             # Excess energy > change in potential energy
             excess_energy = (thrust_max - drag) * v - mass * oc.aero.g0 * U[k][1]
