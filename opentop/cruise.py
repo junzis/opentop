@@ -217,7 +217,9 @@ class Cruise(Base):
         alt_f = X[-1][2] / ft
         rho_f = oc.aero.density(X[-1][2], dT=self.dT)
         thrust_max_f = self.thrust.cruise(tas_f, alt_f, dT=self.dT)
-        opti.subject_to(thrust_max_f * 0.95 >= self.drag.clean(mass_f, tas_f, alt_f, dT=self.dT))
+        opti.subject_to(
+            thrust_max_f * 0.95 >= self.drag.clean(mass_f, tas_f, alt_f, dT=self.dT)
+        )
         cd0 = self.drag.polar["clean"]["cd0"]
         ck = self.drag.polar["clean"]["k"]
         drag_max_f = thrust_max_f * 0.9
@@ -238,7 +240,9 @@ class Cruise(Base):
 
         # Smooth vertical rate change
         for k in range(self.nodes - 1):
-            opti.subject_to(opti.bounded(-500 * fpm, U[k + 1][1] - U[k][1], 500 * fpm))
+            opti.subject_to(
+                opti.bounded(-500 * fpm, U[k + 1][1] - U[k][1], 500 * fpm) # type: ignore[arg-type]  # CasADi stubs wrong
+            )
 
         # Optional constraints
         if self.fix_mach:
