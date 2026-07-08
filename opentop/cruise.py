@@ -77,7 +77,9 @@ class Cruise(Base):
         # Convert lat/lon to Cartesian coordinates.
         xp_0, yp_0 = self.proj(self.lon1, self.lat1)
         xp_f, yp_f = self.proj(self.lon2, self.lat2)
-        x_min, x_max, y_min, y_max = self._compute_bbox()
+        x_min, x_max, y_min, y_max = self._compute_bbox(
+            waypoints=kwargs.get("waypoints")
+        )
 
         ts_min = 0
         ts_max = max(5, self.range / 1000 / 500) * 3600
@@ -143,6 +145,12 @@ class Cruise(Base):
         time_dependent: bool = False,
         auto_rescale_objective: bool = False,
         exact_hessian: bool = False,
+        waypoints: list[LatLon] | None = None,
+        waypoint_tolerance_m: float = 2_000.0,
+        waypoint_node_indices: list[int] | None = None,
+        variable_timestep: bool | None = None,
+        dt_min: float = 5.0,
+        dt_max: float | None = None,
         result_object: bool = False,
     ) -> pd.DataFrame | TrajectoryResult:
         """Compute the optimal cruise trajectory.
@@ -162,6 +170,14 @@ class Cruise(Base):
             time_dependent: Grid cost is time-dependent. Default False.
             auto_rescale_objective: Rescale objective to O(1). Default False.
             exact_hessian: Force IPOPT exact Hessian. Default False.
+            waypoints: Ordered waypoint list as (lat, lon) pairs.
+            waypoint_tolerance_m: Maximum waypoint miss distance in meters.
+            waypoint_node_indices: Optional interior node indices assigned to
+                waypoints. Defaults to evenly spaced ordered interior nodes.
+            variable_timestep: Optimize interval durations. Defaults to True
+                when waypoints are supplied, otherwise False.
+            dt_min: Minimum interval duration in seconds for variable timesteps.
+            dt_max: Maximum interval duration in seconds for variable timesteps.
             result_object: If True, return a TrajectoryResult instead of a
                 DataFrame. Default False.
 
@@ -175,7 +191,17 @@ class Cruise(Base):
             "time_dependent": time_dependent,
             "auto_rescale_objective": auto_rescale_objective,
             "exact_hessian": exact_hessian,
+            "waypoints": waypoints,
+            "waypoint_tolerance_m": waypoint_tolerance_m,
+            "waypoint_node_indices": waypoint_node_indices,
+            "variable_timestep": waypoints is not None
+            if variable_timestep is None
+            else variable_timestep,
+            "dt_min": dt_min,
+            "dt_max": dt_max,
         }
+        if dt_max is None:
+            _kwargs.pop("dt_max")
         init_kwargs = dict(_kwargs)
         if h_min is not None:
             init_kwargs["h_min"] = h_min
@@ -208,7 +234,10 @@ class Cruise(Base):
 
         # ts and dt consistency
         for k in range(self.nodes - 1):
-            opti.subject_to(opti.bounded(-1, X[k + 1][4] - X[k][4] - self.dt, 1))  # type: ignore[arg-type]  # CasADi stubs wrong: bounded(float, expr, float) is valid
+            opti.subject_to(
+                opti.bounded(-1, X[k + 1][4] - X[k][4] - self._interval_dt(k), 1)  # type: ignore[arg-type]
+                # CasADi stubs wrong: bounded(float, expr, float) is valid
+            )
 
         # Smooth heading change
         for k in range(self.nodes - 1):
@@ -238,6 +267,13 @@ class Cruise(Base):
         if not self.allow_descent:
             for k in range(self.nodes):
                 opti.subject_to(U[k][1] >= 0)
+
+        self._constrain_waypoints(
+            X,
+            waypoints,
+            waypoint_tolerance_m=waypoint_tolerance_m,
+            waypoint_node_indices=waypoint_node_indices,
+        )
 
         # Fuel constraint
         opti.subject_to(opti.bounded(0, X[0][3] - X[-1][3], self.fuel_max))  # type: ignore[arg-type]  # CasADi stubs wrong
