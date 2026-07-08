@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 class Base:
     BADA4_MIN_FUELFLOW_KG_S: ClassVar[float] = 0.05
+    MASS_CONSTRAINT_TOL_KG: ClassVar[float] = 1e-3
 
     # Attributes set by subclass init_conditions — declared here for pyright.
     # Runtime values are always assigned before _build_opti is called.
@@ -59,6 +60,7 @@ class Base:
         dT: float = 0.0,
         performance_model: str = "openap",
         bada_path: str | None = None,
+        payload: float | None = None,
     ) -> None:
         """OpenAP trajectory optimizer.
 
@@ -74,6 +76,9 @@ class Base:
             dT (float, optional): Temperature shift from standard ISA. Default = 0.
             performance_model: Performance model name: "openap", "bada3", or "bada4".
             bada_path: Path to BADA data when using BADA performance models.
+            payload: Payload mass in kg. When provided, initial mass is optimized
+                between OEW + payload and the aircraft's fuel/MTOW limit; m0 is used
+                as the initial mass guess.
         """
         if isinstance(origin, str):
             ap1 = openap.nav.airport(origin)
@@ -103,10 +108,21 @@ class Base:
         self.engtype = models.engtype
         self.engine = models.engine
 
-        self.mass_init = m0 * self.aircraft["mtow"]
         self.oew = self.aircraft["oew"]
         self.mlw = self.aircraft["mlw"]
         self.fuel_max = self.aircraft["mfc"]
+        self.payload = payload
+        self.mass_min = self._mass_min(payload)
+        self.mass_init_lb, self.mass_init_ub = self._mass_init_bounds(m0)
+        self.mass_init = min(
+            max(m0 * self.aircraft["mtow"], self.mass_init_lb), self.mass_init_ub
+        )
+        if payload is not None:
+            warnings.warn(
+                "payload is provided; m0 is used only as the initial mass guess "
+                "and does not fix the initial mass.",
+                stacklevel=2,
+            )
         self.mach_max = self.aircraft["mmo"]
         self.dT = dT
 
@@ -129,6 +145,29 @@ class Base:
         self._last_solution = None
         self.objective_value: float | None = None
         self.setup()
+
+    def _mass_min(self, payload: float | None) -> float:
+        """Minimum physically allowed mass for the optimized trajectory."""
+        if payload is None:
+            return self.oew
+        if payload < 0:
+            raise ValueError("payload must be non-negative")
+
+        mass_min = self.oew + payload
+        if mass_min > self.aircraft["mtow"]:
+            raise ValueError("OEW + payload must not exceed MTOW")
+        return mass_min
+
+    def _mass_init_bounds(self, m0: float) -> tuple[float, float]:
+        """Initial-mass bounds; fixed unless payload optimization is enabled."""
+        mass_guess = m0 * self.aircraft["mtow"]
+        if self.payload is None:
+            return mass_guess, mass_guess
+
+        mass_init_ub = min(self.aircraft["mtow"], self.mass_min + self.fuel_max)
+        if mass_init_ub <= self.mass_min:
+            raise ValueError("payload leaves no feasible fuel capacity")
+        return self.mass_min, mass_init_ub
 
     @property
     def solver(self):

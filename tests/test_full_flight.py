@@ -62,6 +62,49 @@ class TestCompleteFlight:
         assert len(df) > 0
 
 
+def test_complete_flight_payload_makes_initial_mass_bounded(
+    aircraft_type, short_flight
+):
+    payload = 10_000.0
+
+    with pytest.warns(UserWarning, match="m0 is used only as the initial mass guess"):
+        opt = top.CompleteFlight(
+            aircraft_type,
+            short_flight["origin"],
+            short_flight["destination"],
+            short_flight["m0"],
+            payload=payload,
+        )
+    opt.init_conditions()
+
+    expected_min_mass = opt.oew + payload
+    expected_max_mass = min(opt.aircraft["mtow"], expected_min_mass + opt.fuel_max)
+
+    assert opt.mass_min == expected_min_mass
+    assert opt.x_0_lb[3] == expected_min_mass
+    assert opt.x_0_ub[3] == expected_max_mass
+    assert opt.x_f_lb[3] == expected_min_mass
+    assert opt.x_lb[3] == expected_min_mass
+    assert opt.x_ub[3] == expected_max_mass
+    assert expected_min_mass <= opt.x_guess[0, 3] <= expected_max_mass
+
+
+def test_complete_flight_without_payload_keeps_initial_mass_fixed(
+    aircraft_type, short_flight
+):
+    opt = top.CompleteFlight(
+        aircraft_type,
+        short_flight["origin"],
+        short_flight["destination"],
+        short_flight["m0"],
+    )
+    opt.init_conditions()
+
+    assert opt.x_0_lb[3] == opt.mass_init
+    assert opt.x_0_ub[3] == opt.mass_init
+    assert opt.x_f_lb[3] == opt.oew * 0.5
+
+
 def test_complete_flight_callable_objective():
     """Verify objective=callable end-to-end, pinning the `(x, u, dt, **kwargs) -> ca.MX`
     contract. Before Phase 3 changes objective dispatch, this ensures user-supplied

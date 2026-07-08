@@ -100,6 +100,53 @@ def test_cruise_accepts_constructor_altitude_bounds(aircraft_type, short_flight)
     assert opt.x_ub[2] == h_max
 
 
+def test_cruise_payload_makes_initial_mass_bounded(aircraft_type, short_flight):
+    payload = 10_000.0
+
+    with pytest.warns(UserWarning, match="m0 is used only as the initial mass guess"):
+        opt = top.Cruise(
+            aircraft_type,
+            short_flight["origin"],
+            short_flight["destination"],
+            short_flight["m0"],
+            payload=payload,
+        )
+    opt.init_conditions()
+
+    expected_min_mass = opt.oew + payload
+    expected_max_mass = min(opt.aircraft["mtow"], expected_min_mass + opt.fuel_max)
+
+    assert opt.mass_min == expected_min_mass
+    assert opt.x_0_lb[3] == expected_min_mass
+    assert opt.x_0_ub[3] == expected_max_mass
+    assert opt.x_f_lb[3] == expected_min_mass
+    assert opt.x_ub[3] == expected_max_mass
+    assert expected_min_mass <= opt.x_guess[0, 3] <= expected_max_mass
+
+
+def test_cruise_without_payload_keeps_initial_mass_fixed(aircraft_type, short_flight):
+    opt = top.Cruise(
+        aircraft_type,
+        short_flight["origin"],
+        short_flight["destination"],
+        short_flight["m0"],
+    )
+    opt.init_conditions()
+
+    assert opt.x_0_lb[3] == opt.mass_init
+    assert opt.x_0_ub[3] == opt.mass_init
+
+
+def test_cruise_rejects_payload_above_mtow(aircraft_type, short_flight):
+    with pytest.raises(ValueError, match="OEW \\+ payload must not exceed MTOW"):
+        top.Cruise(
+            aircraft_type,
+            short_flight["origin"],
+            short_flight["destination"],
+            payload=100_000.0,
+        )
+
+
 def test_cruise_initial_guess_is_honored_with_no_double_init(
     aircraft_type, short_flight
 ):

@@ -6,6 +6,17 @@ docs/design/
 tests/benchmarks/
 debug/scaling/investigation/
 
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -58,6 +69,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+.ruff_cache/
 
 # Translations
 *.mo
@@ -111,6 +123,8 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
 .venv
 env/
 venv/
@@ -133,8 +147,14 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
+# pyright
+.pyright/
+
 # Pyre type checker
 .pyre/
+
+# uv
+.uv-cache/
 
 # Claude Code local config
 .claude/

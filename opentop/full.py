@@ -32,6 +32,7 @@ class CompleteFlight(Base):
         dT: float = 0.0,
         performance_model: str = "openap",
         bada_path: str | None = None,
+        payload: float | None = None,
     ) -> None:
         super().__init__(
             actype,
@@ -43,6 +44,7 @@ class CompleteFlight(Base):
             dT=dT,
             performance_model=performance_model,
             bada_path=bada_path,
+            payload=payload,
         )
 
     def init_conditions(self, **kwargs: Any) -> None:
@@ -61,18 +63,19 @@ class CompleteFlight(Base):
 
         psi = self._compute_bearing_psi()
         min_mach = 0.3 if self.performance_model == "bada4" else 0.1
+        mass_lower = self.mass_min if self.payload is not None else self.oew * 0.5
 
         # Initial conditions - Lower upper bounds
-        self.x_0_lb = [xp_0, yp_0, h_min, self.mass_init, ts_min]
-        self.x_0_ub = [xp_0, yp_0, h_min, self.mass_init, ts_min]
+        self.x_0_lb = [xp_0, yp_0, h_min, self.mass_init_lb, ts_min]
+        self.x_0_ub = [xp_0, yp_0, h_min, self.mass_init_ub, ts_min]
 
         # Final conditions - Lower and upper bounds
-        self.x_f_lb = [xp_f, yp_f, h_min, self.oew * 0.5, ts_min]
-        self.x_f_ub = [xp_f, yp_f, h_min, self.mass_init, ts_max]
+        self.x_f_lb = [xp_f, yp_f, h_min, mass_lower, ts_min]
+        self.x_f_ub = [xp_f, yp_f, h_min, self.mass_init_ub, ts_max]
 
         # States - Lower and upper bounds
-        self.x_lb = [x_min, y_min, h_min, self.oew * 0.5, ts_min]
-        self.x_ub = [x_max, y_max, h_max, self.mass_init, ts_max]
+        self.x_lb = [x_min, y_min, h_min, mass_lower, ts_min]
+        self.x_ub = [x_max, y_max, h_max, self.mass_init_ub, ts_max]
 
         # Control init - lower and upper bounds
         self.u_0_lb = [min_mach, 500 * fpm, psi]
@@ -244,10 +247,12 @@ class CompleteFlight(Base):
 
         if df is not None:
             final_mass = df.mass.iloc[-1]
-            if final_mass < self.oew:
-                warnings.warn("final mass condition violated (smaller than OEW).")
+            if final_mass < self.mass_min - self.MASS_CONSTRAINT_TOL_KG:
+                warnings.warn(
+                    "final mass condition violated (smaller than minimum mass)."
+                )
                 df = None
-            if final_mass > self.mlw:
+            if final_mass > self.mlw + self.MASS_CONSTRAINT_TOL_KG:
                 warnings.warn("final mass condition violated (larger than MLW).")
                 df = None
 
