@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import warnings
+from itertools import pairwise
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 import casadi as ca
@@ -237,7 +238,7 @@ class Base:
             return lon, lat
 
     def _compute_bbox(
-        self, margin_m: float = 10_000
+        self, margin_m: float = 10_000, waypoints: Any = None
     ) -> tuple[float, float, float, float]:
         """Compute projected bounding box around origin/destination with margin.
 
@@ -245,10 +246,17 @@ class Base:
         """
         xp_0, yp_0 = self.proj(self.lon1, self.lat1)
         xp_f, yp_f = self.proj(self.lon2, self.lat2)
-        x_min = min(xp_0, xp_f) - margin_m
-        x_max = max(xp_0, xp_f) + margin_m
-        y_min = min(yp_0, yp_f) - margin_m
-        y_max = max(yp_0, yp_f) + margin_m
+        xs = [xp_0, xp_f]
+        ys = [yp_0, yp_f]
+        for lat, lon in self._normalize_waypoints(waypoints):
+            xp, yp = self.proj(lon, lat)
+            xs.append(xp)
+            ys.append(yp)
+
+        x_min = min(xs) - margin_m
+        x_max = max(xs) + margin_m
+        y_min = min(ys) - margin_m
+        y_max = max(ys) + margin_m
         return x_min, x_max, y_min, y_max
 
     def _compute_bearing_psi(self) -> float:
@@ -404,6 +412,7 @@ class Base:
         self.x = ca.vertcat(xp, yp, h, m, ts)
         self.u = ca.vertcat(mach, vs, psi)
 
+        interval_dt = ca.MX.sym("dt")  # type: ignore[arg-type]
         # self.ts_final and self.dt are set by _build_opti() before this call
 
         # Handle objective function. User callables expect `self.obj_*`
@@ -412,20 +421,20 @@ class Base:
         # injected here.
         if isinstance(objective, Callable):
             self.objective = objective
-            L = self.objective(self.x, self.u, self.dt, **kwargs)
+            L = self.objective(self.x, self.u, interval_dt, **kwargs)
         else:
             resolved = _objectives.resolve_objective(objective)
             ctx = self._objective_ctx()
             ctx.update(kwargs)
             self.objective = lambda x, u, dt, **kw: resolved(x, u, dt, **{**ctx, **kw})
-            L = resolved(self.x, self.u, self.dt, **ctx)
+            L = resolved(self.x, self.u, interval_dt, **ctx)
 
         # Continuous time dynamics
         self.func_dynamics = ca.Function(
             "f",
-            [self.x, self.u],
+            [self.x, self.u, interval_dt],
             [self.xdot(self.x, self.u), L],
-            ["x", "u"],
+            ["x", "u", "dt"],
             ["xdot", "L"],
             {"allow_free": True},
         )
@@ -441,7 +450,7 @@ class Base:
         Args:
             objective: Objective function name or callable.
             ts_final_guess: Initial guess for total flight time (seconds).
-            **kwargs: Passed through to init_model().
+            **kwargs: Solver construction options and objective options.
 
         Returns:
             tuple: (X, U) where X is list of state MX vars at each node boundary
@@ -475,9 +484,27 @@ class Base:
         self._opti.subject_to(self.ts_final >= 0)
         self._opti.set_initial(self.ts_final, ts_final_guess)
         self.dt = self.ts_final / self.nodes
+        variable_timestep = bool(
+            kwargs.get("variable_timestep", kwargs.get("waypoints") is not None)
+        )
+        self._variable_timestep = variable_timestep
+        self._interval_dts: list[Any] = []
+        model_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key
+            not in {
+                "waypoints",
+                "waypoint_tolerance_m",
+                "waypoint_node_indices",
+                "variable_timestep",
+                "dt_min",
+                "dt_max",
+            }
+        }
 
         # Build dynamics function (captures self.dt with free ts_final)
-        self.init_model(objective, **kwargs)
+        self.init_model(objective, **model_kwargs)
 
         C, D, B = self.collocation_coeff()
         nstates = self.x.shape[0]
@@ -493,6 +520,18 @@ class Base:
         X.append(Xk)
 
         for k in range(self.nodes):
+            if variable_timestep:
+                interval_dt = self._opti.variable()
+                dt_min = kwargs.get("dt_min", 5.0)
+                dt_max = kwargs.get("dt_max", self.x_f_ub[4])
+                self._opti.subject_to(self._opti.bounded(dt_min, interval_dt, dt_max))  # type: ignore[arg-type]  # CasADi stubs wrong
+                self._opti.set_initial(
+                    interval_dt, min(max(ts_final_guess / self.nodes, dt_min), dt_max)
+                )
+                self._interval_dts.append(interval_dt)
+            else:
+                interval_dt = self.dt
+
             # Control variable
             Uk = self._opti.variable(self.u.shape[0])
             U.append(Uk)
@@ -522,9 +561,9 @@ class Base:
                 for r in range(self.polydeg):
                     xpc = xpc + C[r + 1, j] * Xc[r]
 
-                fj, qj = self.func_dynamics(Xc[j - 1], Uk)  # type: ignore[misc]  # CasADi Function.__call__ return is opaque to pyright
+                fj, qj = self.func_dynamics(Xc[j - 1], Uk, interval_dt)  # type: ignore[misc]  # CasADi Function.__call__ return is opaque to pyright
                 self._constrain_performance_model_domain(fj)
-                self._opti.subject_to(self.dt * fj == xpc)
+                self._opti.subject_to(interval_dt * fj == xpc)
 
                 Xk_end = Xk_end + D[j] * Xc[j - 1]
                 J = J + B[j] * qj
@@ -543,6 +582,11 @@ class Base:
 
             # Continuity constraint
             self._opti.subject_to(Xk_end == Xk)
+
+        if variable_timestep:
+            self._opti.subject_to(
+                ca.sum1(ca.vertcat(*self._interval_dts)) == self.ts_final
+            )
 
         # Optional: rescale the objective by its value at the initial guess
         # so IPOPT sees f(x0) ≈ 1. Important for objectives whose natural
@@ -567,6 +611,75 @@ class Base:
         self._opti.minimize(J)
 
         return X, U
+
+    def _interval_dt(self, k: int) -> Any:
+        if getattr(self, "_variable_timestep", False):
+            return self._interval_dts[k]
+        return self.dt
+
+    def _normalize_waypoints(self, waypoints: Any = None) -> list[LatLon]:
+        if waypoints is None:
+            return []
+        normalized = []
+        for waypoint in waypoints:
+            if len(waypoint) != 2:
+                raise ValueError("waypoints must be (lat, lon) pairs")
+            lat, lon = float(waypoint[0]), float(waypoint[1])
+            if not -90 <= lat <= 90:
+                raise ValueError(f"waypoint latitude out of range: {lat}")
+            if not -180 <= lon <= 180:
+                raise ValueError(f"waypoint longitude out of range: {lon}")
+            normalized.append((lat, lon))
+        return normalized
+
+    def _waypoint_node_indices(
+        self, waypoints: list[LatLon], waypoint_node_indices: Any = None
+    ) -> list[int]:
+        if not waypoints:
+            return []
+        if len(waypoints) >= self.nodes:
+            raise ValueError("number of waypoints must be smaller than optimizer nodes")
+
+        if waypoint_node_indices is None:
+            return [
+                max(
+                    1,
+                    min(
+                        self.nodes - 1,
+                        round((i + 1) * self.nodes / (len(waypoints) + 1)),
+                    ),
+                )
+                for i in range(len(waypoints))
+            ]
+
+        indices = [int(index) for index in waypoint_node_indices]
+        if len(indices) != len(waypoints):
+            raise ValueError("waypoint_node_indices must match number of waypoints")
+        if any(index <= 0 or index >= self.nodes for index in indices):
+            raise ValueError("waypoint_node_indices must be interior node indices")
+        if any(b <= a for a, b in pairwise(indices)):
+            raise ValueError("waypoint_node_indices must be strictly increasing")
+        return indices
+
+    def _constrain_waypoints(
+        self,
+        X: list[Any],
+        waypoints: Any = None,
+        *,
+        waypoint_tolerance_m: float = 2_000.0,
+        waypoint_node_indices: Any = None,
+    ) -> None:
+        normalized = self._normalize_waypoints(waypoints)
+        if not normalized:
+            return
+        if waypoint_tolerance_m <= 0:
+            raise ValueError("waypoint_tolerance_m must be positive")
+
+        indices = self._waypoint_node_indices(normalized, waypoint_node_indices)
+        for index, (lat, lon) in zip(indices, normalized):
+            xp, yp = self.proj(lon, lat)
+            dist2 = (X[index][0] - xp) ** 2 + (X[index][1] - yp) ** 2
+            self._opti.subject_to(dist2 <= waypoint_tolerance_m**2)
 
     def _constrain_performance_model_domain(self, xdot: ca.MX) -> None:
         """Keep symbolic dynamics inside model-valid regions.

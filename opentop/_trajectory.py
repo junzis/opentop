@@ -74,12 +74,13 @@ def to_dataframe(
     U = np.append(U, U[:, -1:], axis=1)
     n = nodes + 1
 
-    dt = ts_final / (n - 1)
-
     xp, yp, h, mass, ts = X
     mach, vs, psi = U
     lon, lat = proj(xp, yp, inverse=True)
-    ts_ = np.linspace(0, ts_final, n).round(4)
+    ts_values = np.asarray(ts, dtype=float)
+    ts_ = ts_values.round(4)
+    dt = float(ts_final) / (n - 1)
+    segment_dt = np.diff(ts_values)
     tas = (openap.aero.mach2tas(mach, h, dT=dT) / kts).round(4)  # type: ignore[arg-type]  # openap stubs say int, float works
     alt = (h / ft).round()
     vertrate = (vs / fpm).round()
@@ -99,7 +100,7 @@ def to_dataframe(
             _objectives.obj_grid_cost(
                 X[:, :-1],
                 U[:, :-1],
-                dt,
+                segment_dt,
                 proj=proj,
                 interpolant=interpolant,
                 time_dependent=time_dependent,

@@ -70,7 +70,10 @@ class Climb(Base):
         )
 
     def init_conditions(
-        self, df_cruise: pd.DataFrame, alt_stop: float | None = None
+        self,
+        df_cruise: pd.DataFrame,
+        alt_stop: float | None = None,
+        waypoints: list[LatLon] | None = None,
     ) -> None:
         """Initialize direct collocation bounds and guesses.
 
@@ -81,7 +84,7 @@ class Climb(Base):
 
         # Convert lat/lon to Cartesian coordinates.
         xp_0, yp_0 = self.proj(self.lon1, self.lat1)
-        x_min, x_max, y_min, y_max = self._compute_bbox()
+        x_min, x_max, y_min, y_max = self._compute_bbox(waypoints=waypoints)
         od_psi = self._compute_bearing_psi()
 
         mass_0 = self.mass_init
@@ -153,6 +156,12 @@ class Climb(Base):
         time_dependent: bool = False,
         auto_rescale_objective: bool = False,
         exact_hessian: bool = False,
+        waypoints: list[LatLon] | None = None,
+        waypoint_tolerance_m: float = 2_000.0,
+        waypoint_node_indices: list[int] | None = None,
+        variable_timestep: bool | None = None,
+        dt_min: float = 5.0,
+        dt_max: float | None = None,
         result_object: bool = False,
     ) -> pd.DataFrame | TrajectoryResult:
         """Compute the optimal climb trajectory.
@@ -170,6 +179,14 @@ class Climb(Base):
             time_dependent: Grid cost is time-dependent. Default False.
             auto_rescale_objective: Rescale objective to O(1). Default False.
             exact_hessian: Force IPOPT exact Hessian. Default False.
+            waypoints: Ordered waypoint list as (lat, lon) pairs.
+            waypoint_tolerance_m: Maximum waypoint miss distance in meters.
+            waypoint_node_indices: Optional interior node indices assigned to
+                waypoints. Defaults to evenly spaced ordered interior nodes.
+            variable_timestep: Optimize interval durations. Defaults to True
+                when waypoints are supplied, otherwise False.
+            dt_min: Minimum interval duration in seconds for variable timesteps.
+            dt_max: Maximum interval duration in seconds for variable timesteps.
             result_object: If True, return a TrajectoryResult.
 
         Returns:
@@ -184,8 +201,6 @@ class Climb(Base):
             print("Calculating optimal climbing trajectory...")
 
         assert isinstance(df_cruise, pd.DataFrame)
-        self.init_conditions(df_cruise, alt_stop=alt_stop)
-
         _kwargs = {
             "initial_guess": initial_guess,
             "interpolant": interpolant,
@@ -193,7 +208,19 @@ class Climb(Base):
             "time_dependent": time_dependent,
             "auto_rescale_objective": auto_rescale_objective,
             "exact_hessian": exact_hessian,
+            "waypoints": waypoints,
+            "waypoint_tolerance_m": waypoint_tolerance_m,
+            "waypoint_node_indices": waypoint_node_indices,
+            "variable_timestep": waypoints is not None
+            if variable_timestep is None
+            else variable_timestep,
+            "dt_min": dt_min,
+            "dt_max": dt_max,
         }
+        if dt_max is None:
+            _kwargs.pop("dt_max")
+
+        self.init_conditions(df_cruise, alt_stop=alt_stop, waypoints=waypoints)
 
         X, U = self._build_opti(objective, ts_final_guess=3600, **_kwargs)
         opti = self._opti
@@ -210,8 +237,9 @@ class Climb(Base):
             hk1 = X[k + 1][2]
             vk = oc.aero.mach2tas(U[k][0], hk, dT=self.dT)
             vk1 = oc.aero.mach2tas(U[k + 1][0], hk1, dT=self.dT)
-            dvdt = (vk1 - vk) / self.dt
-            dhdt = (hk1 - hk) / self.dt
+            interval_dt = self._interval_dt(k)
+            dvdt = (vk1 - vk) / interval_dt
+            dhdt = (hk1 - hk) / interval_dt
             thrust_max = self._thrust_climb(vk / kts, hk / ft)
             drag = self.drag.clean(X[k][3], vk / kts, hk / ft, dT=self.dT)
             opti.subject_to(
@@ -220,7 +248,8 @@ class Climb(Base):
 
         # Constrain time and dt
         for k in range(1, self.nodes):
-            opti.subject_to(opti.bounded(-1, X[k][4] - X[k - 1][4] - self.dt, 1))  # type: ignore[arg-type]  # CasADi stubs wrong
+            time_delta = X[k][4] - X[k - 1][4] - self._interval_dt(k - 1)
+            opti.subject_to(opti.bounded(-1, time_delta, 1))  # type: ignore[arg-type]  # CasADi stubs wrong
 
         # Smooth vertical rate changes
         for k in range(1, self.nodes):
@@ -244,6 +273,13 @@ class Climb(Base):
         xp_0, yp_0 = self.proj(self.lon1, self.lat1)
         climb_range = ca.sqrt((X[-1][0] - xp_0) ** 2 + (X[-1][1] - yp_0) ** 2)
         opti.subject_to(climb_range == self.traj_range)
+
+        self._constrain_waypoints(
+            X,
+            waypoints,
+            waypoint_tolerance_m=waypoint_tolerance_m,
+            waypoint_node_indices=waypoint_node_indices,
+        )
 
         # --- Solve ---
         df = self._solve(X, U, **_kwargs)

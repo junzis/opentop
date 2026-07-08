@@ -56,7 +56,10 @@ class Descent(Base):
         )
 
     def init_conditions(
-        self, df_cruise: pd.DataFrame, alt_start: float | None = None
+        self,
+        df_cruise: pd.DataFrame,
+        alt_start: float | None = None,
+        waypoints: list[LatLon] | None = None,
     ) -> None:
         """Initialize direct collocation bounds and guesses.
 
@@ -71,7 +74,7 @@ class Descent(Base):
         xp_0, yp_0 = self.proj(self.lon1, self.lat1)
         xp_f, yp_f = self.proj(self.lon2, self.lat2)
 
-        x_min, x_max, y_min, y_max = self._compute_bbox()
+        x_min, x_max, y_min, y_max = self._compute_bbox(waypoints=waypoints)
         ts_min = 0
         ts_max = 6 * 3600
 
@@ -141,6 +144,12 @@ class Descent(Base):
         time_dependent: bool = False,
         auto_rescale_objective: bool = False,
         exact_hessian: bool = False,
+        waypoints: list[LatLon] | None = None,
+        waypoint_tolerance_m: float = 2_000.0,
+        waypoint_node_indices: list[int] | None = None,
+        variable_timestep: bool | None = None,
+        dt_min: float = 5.0,
+        dt_max: float | None = None,
         result_object: bool = False,
     ) -> pd.DataFrame | TrajectoryResult:
         """Compute the optimal descent trajectory.
@@ -158,6 +167,14 @@ class Descent(Base):
             time_dependent: Grid cost is time-dependent. Default False.
             auto_rescale_objective: Rescale objective to O(1). Default False.
             exact_hessian: Force IPOPT exact Hessian. Default False.
+            waypoints: Ordered waypoint list as (lat, lon) pairs.
+            waypoint_tolerance_m: Maximum waypoint miss distance in meters.
+            waypoint_node_indices: Optional interior node indices assigned to
+                waypoints. Defaults to evenly spaced ordered interior nodes.
+            variable_timestep: Optimize interval durations. Defaults to True
+                when waypoints are supplied, otherwise False.
+            dt_min: Minimum interval duration in seconds for variable timesteps.
+            dt_max: Maximum interval duration in seconds for variable timesteps.
             result_object: If True, return a TrajectoryResult.
 
         Returns:
@@ -172,7 +189,6 @@ class Descent(Base):
             print("Calculating optimal descent trajectory...")
 
         assert isinstance(df_cruise, pd.DataFrame)
-        self.init_conditions(df_cruise, alt_start=alt_start)
 
         _kwargs = {
             "initial_guess": initial_guess,
@@ -181,7 +197,19 @@ class Descent(Base):
             "time_dependent": time_dependent,
             "auto_rescale_objective": auto_rescale_objective,
             "exact_hessian": exact_hessian,
+            "waypoints": waypoints,
+            "waypoint_tolerance_m": waypoint_tolerance_m,
+            "waypoint_node_indices": waypoint_node_indices,
+            "variable_timestep": waypoints is not None
+            if variable_timestep is None
+            else variable_timestep,
+            "dt_min": dt_min,
+            "dt_max": dt_max,
         }
+        if dt_max is None:
+            _kwargs.pop("dt_max")
+
+        self.init_conditions(df_cruise, alt_start=alt_start, waypoints=waypoints)
 
         X, U = self._build_opti(objective, ts_final_guess=3600, **_kwargs)
         opti = self._opti
@@ -190,7 +218,8 @@ class Descent(Base):
 
         # Constrain time and dt
         for k in range(1, self.nodes):
-            opti.subject_to(opti.bounded(-1, X[k][4] - X[k - 1][4] - self.dt, 1))  # type: ignore[arg-type]  # CasADi stubs wrong: bounded(float, expr, float) is valid
+            time_delta = X[k][4] - X[k - 1][4] - self._interval_dt(k - 1)
+            opti.subject_to(opti.bounded(-1, time_delta, 1))  # type: ignore[arg-type]  # CasADi stubs wrong
 
         # Smooth Mach number changes
         for k in range(1, self.nodes):
@@ -220,6 +249,13 @@ class Descent(Base):
             # Excess energy > change in potential energy
             excess_energy = (thrust_max - drag) * v - mass * oc.aero.g0 * U[k][1]
             opti.subject_to(excess_energy >= 0)
+
+        self._constrain_waypoints(
+            X,
+            waypoints,
+            waypoint_tolerance_m=waypoint_tolerance_m,
+            waypoint_node_indices=waypoint_node_indices,
+        )
 
         # --- Solve ---
         df = self._solve(X, U, **_kwargs)
