@@ -1,6 +1,7 @@
 """Tests for optional BADA performance model integration."""
 
 import os
+from typing import cast
 
 import casadi as ca
 import pytest
@@ -8,6 +9,7 @@ from openap.aero import fpm, ft
 
 import numpy as np
 import opentop as top
+import pandas as pd
 from opentop._performance import build_numeric_fuelflow, build_performance_models
 
 BADA3_PATH = os.environ.get("OPENTOP_BADA3_PATH", "/home/junzi/arc/data/bada_312")
@@ -203,6 +205,7 @@ def test_cruise_fuel_optimization_with_bada_model(actype, performance_model, bad
 
     df = opt.trajectory(objective="fuel", return_failed=True)
     assert df is not None
+    df = cast(pd.DataFrame, df)
 
     expected_fuelflow = build_numeric_fuelflow(
         actype,
