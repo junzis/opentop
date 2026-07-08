@@ -149,7 +149,7 @@ class Cruise(Base):
         waypoint_tolerance_m: float = 2_000.0,
         waypoint_node_indices: list[int] | None = None,
         variable_timestep: bool | None = None,
-        dt_min: float = 5.0,
+        dt_min: float | None = None,
         dt_max: float | None = None,
         result_object: bool = False,
     ) -> pd.DataFrame | TrajectoryResult:
@@ -177,6 +177,7 @@ class Cruise(Base):
             variable_timestep: Optimize interval durations. Defaults to True
                 when waypoints are supplied, otherwise False.
             dt_min: Minimum interval duration in seconds for variable timesteps.
+                Defaults to an automatic fraction of the expected interval duration.
             dt_max: Maximum interval duration in seconds for variable timesteps.
             result_object: If True, return a TrajectoryResult instead of a
                 DataFrame. Default False.

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import openap.casadi as oc
 from openap.aero import fpm, ft, kts
 
+import numpy as np
 import pandas as pd
 
 from ._types import LatLon
@@ -93,9 +94,88 @@ class CompleteFlight(Base):
 
         # Initial guess for the states
         self.x_guess = self.initial_guess()
+        phase_indices = self._phase_node_indices(
+            climb_nodes=kwargs.get("climb_nodes"),
+            descent_nodes=kwargs.get("descent_nodes"),
+        )
+        if phase_indices is not None:
+            self._apply_phase_altitude_guess(phase_indices, h_min, h_max)
 
         # Control - guesses
         self.u_guess = [0.6, 1000 * fpm, psi]
+
+    def _phase_node_indices(
+        self,
+        *,
+        climb_nodes: int | None = None,
+        descent_nodes: int | None = None,
+    ) -> tuple[int, int] | None:
+        """Return (top-of-climb index, top-of-descent index), if constrained."""
+        explicit = climb_nodes is not None or descent_nodes is not None
+
+        if climb_nodes is None or descent_nodes is None:
+            if not explicit and self.nodes <= 40:
+                phase_nodes = max(3, self.nodes // 3)
+                if climb_nodes is None:
+                    climb_nodes = phase_nodes
+                if descent_nodes is None:
+                    descent_nodes = phase_nodes
+            else:
+                dd = self.range / (self.nodes + 1)
+                if climb_nodes is None:
+                    climb_nodes = max(10, int(500_000 / dd))
+                if descent_nodes is None:
+                    descent_nodes = max(10, int(300_000 / dd))
+
+        climb_nodes = int(climb_nodes)
+        descent_nodes = int(descent_nodes)
+        if climb_nodes < 1:
+            raise ValueError("climb_nodes must be positive")
+        if descent_nodes < 1:
+            raise ValueError("descent_nodes must be positive")
+        if climb_nodes + descent_nodes >= self.nodes:
+            raise ValueError(
+                "climb_nodes + descent_nodes must leave at least one cruise interval"
+            )
+
+        return climb_nodes, self.nodes - descent_nodes
+
+    def _apply_phase_altitude_guess(
+        self, phase_indices: tuple[int, int], h_min: float, h_max: float
+    ) -> None:
+        """Shape the complete-flight altitude guess around phase boundaries."""
+        idx_toc, idx_tod = phase_indices
+        h_cruise = min(self.aircraft["cruise"]["height"], h_max)
+        h_guess = np.empty(self.nodes + 1)
+        h_guess[: idx_toc + 1] = np.linspace(h_min, h_cruise, idx_toc + 1)
+        h_guess[idx_toc : idx_tod + 1] = h_cruise
+        h_guess[idx_tod:] = np.linspace(h_cruise, h_min, self.nodes - idx_tod + 1)
+        self.x_guess[:, 2] = h_guess
+
+    def setup(
+        self,
+        nodes: int | None = None,
+        polydeg: int = 3,
+        debug: bool = False,
+        max_nodes: int = 120,
+        max_iter: int = 3000,
+        tol: float = 1e-6,
+        acceptable_tol: float = 1e-4,
+        ipopt_kwargs: dict[str, Any] | None = None,
+    ) -> None:
+        """Configure complete-flight discretization and solver settings."""
+        if nodes is None:
+            nodes = min(max_nodes, max(30, int(self.range / 50_000)))
+        super().setup(
+            nodes=nodes,
+            polydeg=polydeg,
+            debug=debug,
+            max_nodes=max_nodes,
+            max_iter=max_iter,
+            tol=tol,
+            acceptable_tol=acceptable_tol,
+            ipopt_kwargs=ipopt_kwargs,
+        )
 
     def _cruise_vertical_rate_limit(self) -> float:
         """Return cruise vertical-rate limit in m/s."""
@@ -131,8 +211,10 @@ class CompleteFlight(Base):
         waypoints: list[LatLon] | None = None,
         waypoint_tolerance_m: float = 2_000.0,
         waypoint_node_indices: list[int] | None = None,
+        climb_nodes: int | None = None,
+        descent_nodes: int | None = None,
         variable_timestep: bool | None = None,
-        dt_min: float = 5.0,
+        dt_min: float | None = None,
         dt_max: float | None = None,
         result_object: bool = False,
     ) -> pd.DataFrame | TrajectoryResult:
@@ -154,9 +236,12 @@ class CompleteFlight(Base):
             waypoint_tolerance_m: Maximum waypoint miss distance in meters.
             waypoint_node_indices: Optional interior node indices assigned to
                 waypoints. Defaults to evenly spaced ordered interior nodes.
+            climb_nodes: Optional number of initial intervals reserved for climb.
+            descent_nodes: Optional number of final intervals reserved for descent.
             variable_timestep: Optimize interval durations. Defaults to True
                 when waypoints are supplied, otherwise False.
             dt_min: Minimum interval duration in seconds for variable timesteps.
+                Defaults to an automatic fraction of the expected interval duration.
             dt_max: Maximum interval duration in seconds for variable timesteps.
             result_object: If True, return a TrajectoryResult.
 
@@ -181,7 +266,11 @@ class CompleteFlight(Base):
         }
         if dt_max is None:
             _kwargs.pop("dt_max")
-        self.init_conditions(**_kwargs)
+        phase_kwargs = {
+            "climb_nodes": climb_nodes,
+            "descent_nodes": descent_nodes,
+        }
+        self.init_conditions(**_kwargs, **phase_kwargs)
 
         if initial_guess is not None:
             self.x_guess = self.initial_guess(initial_guess)
@@ -193,13 +282,9 @@ class CompleteFlight(Base):
 
         # --- Phase-specific constraints ---
 
-        # Constrain altitude during cruise for long flights
-        if self.range > 1500_000:
-            dd = self.range / (self.nodes + 1)
-            max_climb_range = 500_000
-            max_descent_range = 300_000
-            idx_toc = int(max_climb_range / dd)
-            idx_tod = int((self.range - max_descent_range) / dd)
+        phase_indices = self._phase_node_indices(**phase_kwargs)
+        if phase_indices is not None:
+            idx_toc, idx_tod = phase_indices
             cruise_vs_limit = self._cruise_vertical_rate_limit()
             cruise_mach_min = self._cruise_mach_min()
 

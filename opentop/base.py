@@ -338,8 +338,9 @@ class Base:
         """Configure the optimizer discretization and solver settings.
 
         Args:
-            nodes: Number of collocation intervals. Default auto-computed
-                from distance (~1 per 50 km, clamped to [20, max_nodes]).
+            nodes: Number of collocation intervals. Explicit values are honored.
+                The default is auto-computed from distance (~1 per 50 km,
+                clamped to [20, max_nodes]).
             polydeg: Collocation polynomial degree. Default 3 (Legendre).
             debug: Print solver output. Default False.
             max_nodes: Upper limit for auto-computed nodes. Default 120.
@@ -352,12 +353,13 @@ class Base:
         if ipopt_kwargs is None:
             ipopt_kwargs = {}
         if nodes is not None:
-            self.nodes = nodes
+            if nodes < 1:
+                raise ValueError("nodes must be positive")
+            self.nodes = min(max_nodes, nodes)
         else:
             self.nodes = int(self.range / 50_000)  # node every 50km
-
-        self.nodes = max(20, self.nodes)
-        self.nodes = min(max_nodes, self.nodes)
+            self.nodes = max(20, self.nodes)
+            self.nodes = min(max_nodes, self.nodes)
 
         self.polydeg = polydeg
 
@@ -522,8 +524,13 @@ class Base:
         for k in range(self.nodes):
             if variable_timestep:
                 interval_dt = self._opti.variable()
-                dt_min = kwargs.get("dt_min", 5.0)
-                dt_max = kwargs.get("dt_max", self.x_f_ub[4])
+                interval_guess = ts_final_guess / self.nodes
+                dt_min = kwargs.get("dt_min")
+                if dt_min is None:
+                    dt_min = max(5.0, 0.5 * interval_guess)
+                dt_max = kwargs.get("dt_max")
+                if dt_max is None:
+                    dt_max = min(self.x_f_ub[4], max(dt_min, 2.0 * interval_guess))
                 self._opti.subject_to(self._opti.bounded(dt_min, interval_dt, dt_max))  # type: ignore[arg-type]  # CasADi stubs wrong
                 self._opti.set_initial(
                     interval_dt, min(max(ts_final_guess / self.nodes, dt_min), dt_max)
@@ -641,16 +648,28 @@ class Base:
             raise ValueError("number of waypoints must be smaller than optimizer nodes")
 
         if waypoint_node_indices is None:
-            return [
-                max(
-                    1,
-                    min(
-                        self.nodes - 1,
-                        round((i + 1) * self.nodes / (len(waypoints) + 1)),
-                    ),
-                )
-                for i in range(len(waypoints))
+            xp_0, yp_0 = self.proj(self.lon1, self.lat1)
+            xp_f, yp_f = self.proj(self.lon2, self.lat2)
+            points = [(xp_0, yp_0)]
+            points.extend(self.proj(lon, lat) for lat, lon in waypoints)
+            points.append((xp_f, yp_f))
+            segment_lengths = [
+                float(np.hypot(x_b - x_a, y_b - y_a))
+                for (x_a, y_a), (x_b, y_b) in pairwise(points)
             ]
+            total_length = sum(segment_lengths)
+            if total_length <= 0:
+                return list(range(1, len(waypoints) + 1))
+
+            indices = []
+            cumulative = 0.0
+            for i, segment_length in enumerate(segment_lengths[:-1]):
+                cumulative += segment_length
+                raw_index = round(cumulative / total_length * self.nodes)
+                lower = indices[-1] + 1 if indices else 1
+                upper = self.nodes - (len(waypoints) - i)
+                indices.append(max(lower, min(upper, raw_index)))
+            return indices
 
         indices = [int(index) for index in waypoint_node_indices]
         if len(indices) != len(waypoints):

@@ -71,6 +71,24 @@ def test_waypoint_variable_timestep_supports_time_objective(
     assert len(opt._interval_dts) == opt.nodes
 
 
+def test_default_waypoint_nodes_follow_route_distance():
+    opt = top.CompleteFlight("A320", "EHAM", "LIRF", 0.85)
+    waypoints = []
+    for fix_name in ("SIGEN", "FUSSE", "ROKIB"):
+        lat, lon, _ = openap.nav.fix(fix_name)
+        waypoints.append((float(lat), float(lon)))
+
+    assert opt._waypoint_node_indices(waypoints) == [7, 15, 20]
+
+
+def test_explicit_setup_nodes_can_be_below_auto_minimum():
+    opt = top.Cruise("A320", "EHAM", "LIRF", 0.85)
+
+    opt.setup(nodes=15)
+
+    assert opt.nodes == 15
+
+
 def test_waypoint_latitude_is_validated(aircraft_type, short_flight):
     opt = top.Cruise(
         aircraft_type,

@@ -105,6 +105,36 @@ def test_complete_flight_without_payload_keeps_initial_mass_fixed(
     assert opt.x_f_lb[3] == opt.oew * 0.5
 
 
+def test_complete_flight_explicit_phase_nodes_shape_altitude_guess():
+    opt = top.CompleteFlight("A320", "EHAM", "LIRF", m0=0.85)
+    opt.setup(nodes=30)
+
+    opt.init_conditions(climb_nodes=9, descent_nodes=8)
+
+    assert opt._phase_node_indices(climb_nodes=9, descent_nodes=8) == (9, 22)
+    assert opt.x_guess[0, 2] < 1_000
+    assert opt.x_guess[9, 2] == opt.aircraft["cruise"]["height"]
+    assert opt.x_guess[22, 2] == opt.aircraft["cruise"]["height"]
+    assert opt.x_guess[-1, 2] < 1_000
+
+
+def test_complete_flight_auto_setup_and_phase_nodes_are_dense():
+    opt = top.CompleteFlight("A320", "EHAM", "LIRF", m0=0.85)
+
+    opt.setup()
+
+    assert opt.nodes == 30
+    assert opt._phase_node_indices() == (10, 20)
+
+
+def test_complete_flight_phase_nodes_must_leave_cruise_interval():
+    opt = top.CompleteFlight("A320", "EHAM", "LIRF", m0=0.85)
+    opt.setup(nodes=15)
+
+    with pytest.raises(ValueError, match="leave at least one cruise interval"):
+        opt.init_conditions(climb_nodes=8, descent_nodes=7)
+
+
 def test_complete_flight_callable_objective():
     """Verify objective=callable end-to-end, pinning the `(x, u, dt, **kwargs) -> ca.MX`
     contract. Before Phase 3 changes objective dispatch, this ensures user-supplied
