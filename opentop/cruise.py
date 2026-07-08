@@ -197,30 +197,27 @@ class Cruise(Base):
             thrust_max = self._thrust_climb(tas, alt)
             self._constrain_clean_performance(opti, mass, tas, alt, thrust_max)
 
-        # Performance constraints
+        # Terminal state uses the final interval control U[-1].
         v_f = oc.aero.mach2tas(U[-1][0], X[-1][2], dT=self.dT)
         tas_f = v_f / kts
         alt_f = X[-1][2] / ft
-        thrust_max_f = self.thrust.cruise(tas_f, alt_f, dT=self.dT)
+        thrust_max_f = self._thrust_climb(tas_f, alt_f)
         self._constrain_clean_performance(opti, X[-1][3], tas_f, alt_f, thrust_max_f)
 
         # ts and dt consistency
         for k in range(self.nodes - 1):
-            opti.subject_to(opti.bounded(-1, X[k + 1][4] - X[k][4] - self.dt, 1))  # type: ignore[arg-type]
-            # CasADi stubs wrong: bounded(float, expr, float) is valid
+            opti.subject_to(opti.bounded(-1, X[k + 1][4] - X[k][4] - self.dt, 1))  # type: ignore[arg-type]  # CasADi stubs wrong: bounded(float, expr, float) is valid
 
         # Smooth heading change
         for k in range(self.nodes - 1):
             opti.subject_to(
-                opti.bounded(-15 * pi / 180, U[k + 1][2] - U[k][2], 15 * pi / 180)  # type: ignore[arg-type]
-                # CasADi stubs wrong
+                opti.bounded(-15 * pi / 180, U[k + 1][2] - U[k][2], 15 * pi / 180)  # type: ignore[arg-type]  # CasADi stubs wrong
             )
 
         # Smooth vertical rate change
         for k in range(self.nodes - 1):
             opti.subject_to(
-                opti.bounded(-500 * fpm, U[k + 1][1] - U[k][1], 500 * fpm)  # type: ignore[arg-type]
-                # CasADi stubs wrong
+                opti.bounded(-500 * fpm, U[k + 1][1] - U[k][1], 500 * fpm)  # type: ignore[arg-type]  # CasADi stubs wrong
             )
 
         # Optional constraints
@@ -241,8 +238,7 @@ class Cruise(Base):
                 opti.subject_to(U[k][1] >= 0)
 
         # Fuel constraint
-        opti.subject_to(opti.bounded(0, X[0][3] - X[-1][3], self.fuel_max))  # type: ignore[arg-type]
-        # CasADi stubs wrong
+        opti.subject_to(opti.bounded(0, X[0][3] - X[-1][3], self.fuel_max))  # type: ignore[arg-type]  # CasADi stubs wrong
 
         if customized_max_fuel is not None:
             opti.subject_to(X[0][3] - X[-1][3] <= customized_max_fuel)
