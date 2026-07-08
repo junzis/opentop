@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenTOP Functionalities Map</title>
+  <style>
+    :root {
+      --bg: #f6f9fc;
+      --ink: #102538;
+      --muted: #40566d;
+      --line: #d8e2eb;
+      --shadow: 0 14px 30px rgba(29, 54, 77, 0.11);
+      --blue-bg: #e8f3ff;
+      --blue-bd: #94c3ed;
+      --green-bg: #e4f6f0;
+      --green-bd: #82c8b7;
+      --amber-bg: #fff3d9;
+      --amber-bd: #dfb65f;
+      --violet-bg: #f0edff;
+      --violet-bd: #b8afe7;
+      --rose-bg: #fff0ef;
+      --rose-bd: #e1a09d;
+      --teal: #16806e;
+      --center-a: #16324a;
+      --center-b: #1a625b;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      width: 1600px;
+      min-width: 1600px;
+      height: 840px;
+      overflow: hidden;
+      background: var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+    }
+
+    .canvas {
+      position: relative;
+      width: 1600px;
+      height: 840px;
+      padding: 54px 48px 60px;
+      background:
+        radial-gradient(circle at 50% 45%, rgba(22, 128, 110, 0.07), transparent 33%),
+        linear-gradient(180deg, #f8fbfd 0%, #f4f8fb 100%);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 315px 320px 360px 354px;
+      gap: 57px;
+      align-items: center;
+      height: 748px;
+    }
+
+    .lane {
+      height: 748px;
+      padding: 28px 30px 34px;
+      border: 1.2px solid var(--line);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.94);
+      box-shadow: var(--shadow);
+    }
+
+    .lane h2 {
+      margin: 0 0 26px;
+      font-size: 16px;
+      line-height: 1;
+      font-weight: 760;
+      letter-spacing: 0.45px;
+      text-transform: uppercase;
+    }
+
+    .cards {
+      display: grid;
+      gap: 19px;
+    }
+
+    .components .cards {
+      gap: 14px;
+    }
+
+    .outputs .cards {
+      gap: 23px;
+    }
+
+    .card {
+      min-height: 88px;
+      padding: 16px 25px 17px;
+      border: 1.2px solid #d0dbe5;
+      border-radius: 12px;
+      background: #fff;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .components .card {
+      min-height: 80px;
+      padding-top: 15px;
+      padding-bottom: 16px;
+    }
+
+    .card.blue {
+      background: var(--blue-bg);
+      border-color: var(--blue-bd);
+    }
+
+    .card.green {
+      background: var(--green-bg);
+      border-color: var(--green-bd);
+    }
+
+    .card.amber {
+      background: var(--amber-bg);
+      border-color: var(--amber-bd);
+    }
+
+    .card.violet {
+      background: var(--violet-bg);
+      border-color: var(--violet-bd);
+    }
+
+    .card.rose {
+      background: var(--rose-bg);
+      border-color: var(--rose-bd);
+    }
+
+    .card h3 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      line-height: 1.15;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .components .card h3,
+    .outputs .card h3 {
+      font-size: 17px;
+      margin-bottom: 8px;
+    }
+
+    .card p {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.42;
+      color: var(--muted);
+    }
+
+    .engine {
+      height: 640px;
+      padding: 36px 44px 28px;
+      border-radius: 20px;
+      color: #fff;
+      background:
+        linear-gradient(116deg, rgba(13, 38, 62, 0.38) 0 26%, transparent 26% 100%),
+        linear-gradient(122deg, var(--center-a), var(--center-b));
+      border: 1.2px solid #245b63;
+      box-shadow: var(--shadow);
+    }
+
+    .engine h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      line-height: 1.15;
+      font-weight: 760;
+    }
+
+    .engine p {
+      margin: 0;
+      max-width: 280px;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #dbeaf0;
+    }
+
+    .engine hr {
+      height: 1.2px;
+      margin: 34px 0 26px;
+      border: 0;
+      background: rgba(115, 185, 179, 0.75);
+    }
+
+    .engine h3 {
+      margin: 0 0 17px;
+      font-size: 22px;
+      line-height: 1.1;
+      font-weight: 760;
+      color: #fff;
+    }
+
+    .engine ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 7px;
+    }
+
+    .engine li {
+      font-size: 14px;
+      line-height: 1.1;
+      color: #e2eff3;
+    }
+
+    .result-pill {
+      margin-top: 40px;
+      width: 272px;
+      height: 34px;
+      border-radius: 14px;
+      border: 1px solid rgba(190, 241, 234, 0.45);
+      background: rgba(255, 255, 255, 0.08);
+      display: grid;
+      place-items: center;
+      color: #bff1ea;
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: 0.1px;
+    }
+
+    .flow {
+      position: absolute;
+      top: 454px;
+      width: 60px;
+      height: 24px;
+      color: var(--teal);
+    }
+
+    .flow::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 10px;
+      width: 40px;
+      height: 4px;
+      border-radius: 999px;
+      background: currentColor;
+    }
+
+    .flow::after {
+      content: "";
+      position: absolute;
+      right: 0;
+      top: 0;
+      width: 0;
+      height: 0;
+      border-top: 12px solid transparent;
+      border-bottom: 12px solid transparent;
+      border-left: 30px solid currentColor;
+    }
+
+    .flow.one {
+      left: 363px;
+    }
+
+    .flow.two {
+      left: 740px;
+    }
+
+    .flow.three {
+      left: 1140px;
+    }
+  </style>
+</head>
+<body>
+  <main class="canvas" aria-label="OpenTOP functionalities map">
+    <div class="grid">
+      <section class="lane use-cases">
+        <h2>Use cases</h2>
+        <div class="cards">
+          <article class="card blue">
+            <h3>Complete-flight planning</h3>
+            <p>Optimize climb, cruise, descent, and arrival in one trajectory.</p>
+          </article>
+          <article class="card">
+            <h3>Phase optimization</h3>
+            <p>Focus on climb, cruise, or descent as a separate problem.</p>
+          </article>
+          <article class="card green">
+            <h3>Real-flight replay</h3>
+            <p>Compare observed tracks with optimized alternatives.</p>
+          </article>
+          <article class="card amber">
+            <h3>Grid and climate studies</h3>
+            <p>Evaluate contrails, weather, airspace, or custom costs.</p>
+          </article>
+          <article class="card violet">
+            <h3>Robust candidate search</h3>
+            <p>Compare solutions from varied initial trajectory guesses.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="lane components">
+        <h2>Components</h2>
+        <div class="cards">
+          <article class="card">
+            <h3>Aircraft and loading</h3>
+            <p>Type, engine, mass, payload, and fuel capacity.</p>
+          </article>
+          <article class="card">
+            <h3>Route and phase scope</h3>
+            <p>Airports or lat/lon endpoints; complete flight or one phase.</p>
+          </article>
+          <article class="card">
+            <h3>Performance model</h3>
+            <p>OpenAP, BADA3, or BADA4 aircraft envelopes.</p>
+          </article>
+          <article class="card blue">
+            <h3>Objectives and limits</h3>
+            <p>Fuel, time, cost index, climate, maximum fuel, fixed profiles.</p>
+          </article>
+          <article class="card green">
+            <h3>Atmosphere and wind</h3>
+            <p>Wind fields, timing, and temperature shift.</p>
+          </article>
+          <article class="card amber">
+            <h3>Cost-grid context</h3>
+            <p>3D/4D fields for climate, weather, or airspace penalties.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="engine">
+        <h2>Optimization engine</h2>
+        <p>Searches for a feasible trajectory that minimizes the selected operational goal.</p>
+        <hr>
+        <h3>Decision variables</h3>
+        <ul>
+          <li>where the aircraft flies</li>
+          <li>how high it flies</li>
+          <li>how fast and in what direction</li>
+          <li>how long the flight takes</li>
+          <li>how fuel and mass evolve</li>
+        </ul>
+        <hr>
+        <h3>Feasibility checks</h3>
+        <ul>
+          <li>aircraft performance envelopes</li>
+          <li>thrust, drag, and energy limits</li>
+          <li>smooth speed and climb-rate changes</li>
+          <li>fuel capacity and mass constraints</li>
+          <li>heading and phase behavior</li>
+        </ul>
+        <div class="result-pill">physically constrained trajectory</div>
+      </section>
+
+      <section class="lane outputs">
+        <h2>Outputs</h2>
+        <div class="cards">
+          <article class="card blue">
+            <h3>Optimized trajectory</h3>
+            <p>Position, altitude, speed, heading, mass, and time history.</p>
+          </article>
+          <article class="card green">
+            <h3>Fuel and cost accounting</h3>
+            <p>Fuel burn, per-segment fuel cost, and optional grid cost.</p>
+          </article>
+          <article class="card amber">
+            <h3>Objective summary</h3>
+            <p>Selected goal, objective value, and trade-off comparison.</p>
+          </article>
+          <article class="card violet">
+            <h3>Diagnostics</h3>
+            <p>Solver status, iterations, and multi-start candidate ranking.</p>
+          </article>
+          <article class="card rose">
+            <h3>Reusable artifacts</h3>
+            <p>Tables, structured result object, parquet export, trajectory plots.</p>
+          </article>
+        </div>
+      </section>
+    </div>
+
+    <div class="flow one" aria-hidden="true"></div>
+    <div class="flow two" aria-hidden="true"></div>
+    <div class="flow three" aria-hidden="true"></div>
+  </main>
+</body>
+</html>
