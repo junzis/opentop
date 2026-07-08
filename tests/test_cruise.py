@@ -4,6 +4,7 @@ import pytest
 from openap.aero import ft
 
 import opentop as top
+import pandas as pd
 
 
 @pytest.fixture(scope="module")
@@ -75,6 +76,9 @@ class TestCruise:
         assert len(df) > 0
         assert df.mass.iloc[-1] < df.mass.iloc[0]
 
+    def test_vertical_rate_change_is_smooth(self, cruise_df):
+        assert cruise_df.vertical_rate.diff().dropna().abs().max() <= 500
+
 
 def test_cruise_accepts_constructor_altitude_bounds(aircraft_type, short_flight):
     h_min = 25_000 * ft
@@ -123,3 +127,53 @@ def test_cruise_initial_guess_is_honored_with_no_double_init(
     result = opt2.trajectory(objective="fuel", initial_guess=baseline)  # type: ignore[arg-type]  # trajectory() without result_object returns DataFrame; passes as initial_guess
     assert result is not None
     assert len(result) == len(baseline)  # type: ignore[arg-type]  # trajectory() without result_object always returns DataFrame
+
+
+def test_cruise_terminal_performance_uses_shared_thrust_helper(
+    monkeypatch, aircraft_type, short_flight
+):
+    opt = top.Cruise(
+        aircraft_type,
+        short_flight["origin"],
+        short_flight["destination"],
+        short_flight["m0"],
+    )
+
+    thrust_calls = []
+    performance_calls = []
+    original_thrust_climb = opt._thrust_climb
+    original_constrain_clean_performance = opt._constrain_clean_performance
+
+    def spy_thrust_climb(tas, alt):
+        thrust_calls.append((tas, alt))
+        return original_thrust_climb(tas, alt)
+
+    def spy_constrain_clean_performance(opti, mass, tas, alt, thrust_max, **kwargs):
+        performance_calls.append((mass, tas, alt, thrust_max))
+        return original_constrain_clean_performance(
+            opti, mass, tas, alt, thrust_max, **kwargs
+        )
+
+    class FakeSolution:
+        def stats(self):
+            return {"success": True}
+
+    def fake_solve(X, U, **kwargs):
+        opt._last_solution = FakeSolution()
+        return pd.DataFrame(
+            {
+                "altitude": [30_000.0, 30_000.0],
+                "mass": [opt.mass_init, opt.mass_init - 1.0],
+            }
+        )
+
+    monkeypatch.setattr(opt, "_thrust_climb", spy_thrust_climb)
+    monkeypatch.setattr(
+        opt, "_constrain_clean_performance", spy_constrain_clean_performance
+    )
+    monkeypatch.setattr(opt, "_solve", fake_solve)
+
+    opt.trajectory(objective="fuel")
+
+    assert len(thrust_calls) == opt.nodes + 1
+    assert len(performance_calls) == opt.nodes + 1
