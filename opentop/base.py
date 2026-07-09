@@ -357,7 +357,7 @@ class Base:
         if nodes is not None:
             if nodes < 1:
                 raise ValueError("nodes must be positive")
-            self.nodes = min(max_nodes, nodes)
+            self.nodes = nodes
         else:
             self.nodes = int(self.range / 50_000)  # node every 50km
             self.nodes = max(20, self.nodes)
@@ -636,6 +636,11 @@ class Base:
             dt_max = min(
                 self.x_f_ub[4],
                 max(dt_min, self.VARIABLE_TIMESTEP_MAX_FACTOR * interval_guess),
+            )
+        if not (np.isfinite(dt_min) and np.isfinite(dt_max) and 0 < dt_min <= dt_max):
+            raise ValueError(
+                "variable timestep bounds must be finite, positive, and ordered "
+                "with dt_min <= dt_max"
             )
         return dt_min, dt_max, min(max(interval_guess, dt_min), dt_max)
 

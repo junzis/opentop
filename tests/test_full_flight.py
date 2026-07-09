@@ -127,6 +127,26 @@ def test_complete_flight_auto_setup_and_phase_nodes_are_dense():
     assert opt._phase_node_indices() == (10, 20)
 
 
+def test_complete_flight_phase_nodes_fit_dense_short_route_mesh():
+    opt = top.CompleteFlight("A320", "EHAM", "EDDF", m0=0.85)
+    opt.setup(nodes=41)
+
+    assert opt._phase_node_indices() == (13, 28)
+
+
+@pytest.mark.parametrize(
+    ("phase_kwargs", "expected_indices"),
+    [
+        ({"climb_nodes": 5}, (5, 20)),
+        ({"descent_nodes": 5}, (10, 25)),
+    ],
+)
+def test_complete_flight_partial_phase_node_override(phase_kwargs, expected_indices):
+    opt = top.CompleteFlight("A320", "EHAM", "EDDF", m0=0.85)
+
+    assert opt._phase_node_indices(**phase_kwargs) == expected_indices
+
+
 def test_complete_flight_phase_nodes_must_leave_cruise_interval():
     opt = top.CompleteFlight("A320", "EHAM", "LIRF", m0=0.85)
     opt.setup(nodes=15)

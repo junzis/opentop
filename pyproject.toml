@@ -16,7 +16,7 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "openap>=2.5",
+    "openap>=2.6",
     "casadi>=3.7",
     "pyproj>=3.7",
     "scikit-learn>=1.8",

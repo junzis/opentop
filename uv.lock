@@ -2871,7 +2871,7 @@ wheels = [
 
 [[package]]
 name = "openap"
-version = "2.5.0"
+version = "2.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matplotlib" },
@@ -2880,9 +2880,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "scipy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/01/96/5ce6ef19c843bcc637ef0f6de4fa9ead65ed081982d880364e31c18833ae/openap-2.5.0.tar.gz", hash = "sha256:10a7c6c528b494dd275fcc52c509e71a19e63dd9baa7d455c6c4e64688ea4b1f", size = 9403094, upload-time = "2026-03-18T16:38:31.891Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/3e/ee62c66def7c570d1aec06e6e0e04c46492028d7ae4c135ab24aa8ce4978/openap-2.6.0.tar.gz", hash = "sha256:be47e75c5ade7c56b9476fbf45d506a385ed3abfc2185197da6ee7e20ea8ada3", size = 9410048, upload-time = "2026-07-02T14:42:27.54Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/1e/038e5131590b16a8b02f35199d94a5338d5779553e5940a72a106ec8323b/openap-2.5.0-py3-none-any.whl", hash = "sha256:4ca114b06a175ffc45ebdeffd10fcd076a6877eb3e5f4b116c732feb4bcbdfca", size = 2697608, upload-time = "2026-03-18T16:38:30.412Z" },
+    { url = "https://files.pythonhosted.org/packages/66/b1/4263c069ca2177d9c71d2c19046e2b587b13b6936f22df9e082233b5ec64/openap-2.6.0-py3-none-any.whl", hash = "sha256:aed9a19f232f57744bbe3276e1e044f74f1984dc16a72d00797aa70f54800fab", size = 2699866, upload-time = "2026-07-02T14:42:25.368Z" },
 ]
 
 [[package]]
@@ -2923,7 +2923,7 @@ requires-dist = [
     { name = "casadi", specifier = ">=3.7" },
     { name = "click", specifier = ">=8.3" },
     { name = "fastmeteo", marker = "extra == 'replay'", specifier = ">=1.2.0" },
-    { name = "openap", specifier = ">=2.5" },
+    { name = "openap", specifier = ">=2.6" },
     { name = "pandas", marker = "extra == 'replay'", specifier = "<3" },
     { name = "pyarrow", specifier = ">=23.0" },
     { name = "pyproj", specifier = ">=3.7" },

@@ -109,26 +109,46 @@ class CompleteFlight(Base):
         *,
         climb_nodes: int | None = None,
         descent_nodes: int | None = None,
-    ) -> tuple[int, int] | None:
-        """Return (top-of-climb index, top-of-descent index), if constrained."""
-        explicit = climb_nodes is not None or descent_nodes is not None
+    ) -> tuple[int, int]:
+        """Return the top-of-climb and top-of-descent node indices."""
+        if self.nodes < 3:
+            raise ValueError(
+                "complete flights need at least three intervals for climb, "
+                "cruise, and descent"
+            )
 
-        if climb_nodes is None or descent_nodes is None:
-            if not explicit and self.nodes <= 40:
-                phase_nodes = max(3, self.nodes // 3)
-                if climb_nodes is None:
-                    climb_nodes = phase_nodes
-                if descent_nodes is None:
-                    descent_nodes = phase_nodes
-            else:
-                dd = self.range / (self.nodes + 1)
-                if climb_nodes is None:
-                    climb_nodes = max(10, int(500_000 / dd))
-                if descent_nodes is None:
-                    descent_nodes = max(10, int(300_000 / dd))
+        # Fixed 500/300 km phase lengths can consume an entire short route;
+        # thirds also give coarse meshes enough nodes in every phase.
+        if self.nodes <= 40 or self.range <= 800_000:
+            default_climb = default_descent = max(3, self.nodes // 3)
+        else:
+            interval_distance = self.range / (self.nodes + 1)
+            default_climb = max(10, int(500_000 / interval_distance))
+            default_descent = max(10, int(300_000 / interval_distance))
 
-        climb_nodes = int(climb_nodes)
-        descent_nodes = int(descent_nodes)
+        # Automatic allocations must leave at least one interval for cruise.
+        available_phase_nodes = self.nodes - 1
+        if default_climb + default_descent > available_phase_nodes:
+            climb_share = default_climb / (default_climb + default_descent)
+            default_climb = round(available_phase_nodes * climb_share)
+            default_climb = min(max(1, default_climb), available_phase_nodes - 1)
+            default_descent = available_phase_nodes - default_climb
+
+        if climb_nodes is not None:
+            climb_nodes = int(climb_nodes)
+            if climb_nodes < 1:
+                raise ValueError("climb_nodes must be positive")
+        if descent_nodes is not None:
+            descent_nodes = int(descent_nodes)
+            if descent_nodes < 1:
+                raise ValueError("descent_nodes must be positive")
+
+        if climb_nodes is None:
+            descent = default_descent if descent_nodes is None else descent_nodes
+            climb_nodes = min(default_climb, self.nodes - descent - 1)
+        if descent_nodes is None:
+            descent_nodes = min(default_descent, self.nodes - climb_nodes - 1)
+
         if climb_nodes < 1:
             raise ValueError("climb_nodes must be positive")
         if descent_nodes < 1:
