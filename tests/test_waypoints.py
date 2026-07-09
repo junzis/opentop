@@ -89,6 +89,18 @@ def test_explicit_setup_nodes_can_be_below_auto_minimum():
     assert opt.nodes == 15
 
 
+def test_variable_timestep_default_bounds_are_moderately_relaxed():
+    opt = top.CompleteFlight("A320", "EHAM", "LIRF", 0.85)
+    opt.init_conditions()
+
+    dt_min, dt_max, dt_guess = opt._variable_timestep_bounds(7200)
+    interval_guess = 7200 / opt.nodes
+
+    assert dt_min == pytest.approx(0.65 * interval_guess)
+    assert dt_max == pytest.approx(1.65 * interval_guess)
+    assert dt_guess == pytest.approx(interval_guess)
+
+
 def test_waypoint_latitude_is_validated(aircraft_type, short_flight):
     opt = top.Cruise(
         aircraft_type,

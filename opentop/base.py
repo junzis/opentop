@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 class Base:
     BADA4_MIN_FUELFLOW_KG_S: ClassVar[float] = 0.05
     MASS_CONSTRAINT_TOL_KG: ClassVar[float] = 1e-3
+    VARIABLE_TIMESTEP_MIN_FACTOR: ClassVar[float] = 0.65
+    VARIABLE_TIMESTEP_MAX_FACTOR: ClassVar[float] = 1.65
 
     # Attributes set by subclass init_conditions — declared here for pyright.
     # Runtime values are always assigned before _build_opti is called.
@@ -524,17 +526,13 @@ class Base:
         for k in range(self.nodes):
             if variable_timestep:
                 interval_dt = self._opti.variable()
-                interval_guess = ts_final_guess / self.nodes
-                dt_min = kwargs.get("dt_min")
-                if dt_min is None:
-                    dt_min = max(5.0, 0.5 * interval_guess)
-                dt_max = kwargs.get("dt_max")
-                if dt_max is None:
-                    dt_max = min(self.x_f_ub[4], max(dt_min, 2.0 * interval_guess))
-                self._opti.subject_to(self._opti.bounded(dt_min, interval_dt, dt_max))  # type: ignore[arg-type]  # CasADi stubs wrong
-                self._opti.set_initial(
-                    interval_dt, min(max(ts_final_guess / self.nodes, dt_min), dt_max)
+                dt_min, dt_max, interval_guess = self._variable_timestep_bounds(
+                    ts_final_guess,
+                    dt_min=kwargs.get("dt_min"),
+                    dt_max=kwargs.get("dt_max"),
                 )
+                self._opti.subject_to(self._opti.bounded(dt_min, interval_dt, dt_max))  # type: ignore[arg-type]  # CasADi stubs wrong
+                self._opti.set_initial(interval_dt, interval_guess)
                 self._interval_dts.append(interval_dt)
             else:
                 interval_dt = self.dt
@@ -623,6 +621,23 @@ class Base:
         if getattr(self, "_variable_timestep", False):
             return self._interval_dts[k]
         return self.dt
+
+    def _variable_timestep_bounds(
+        self,
+        ts_final_guess: float,
+        *,
+        dt_min: float | None = None,
+        dt_max: float | None = None,
+    ) -> tuple[float, float, float]:
+        interval_guess = ts_final_guess / self.nodes
+        if dt_min is None:
+            dt_min = max(5.0, self.VARIABLE_TIMESTEP_MIN_FACTOR * interval_guess)
+        if dt_max is None:
+            dt_max = min(
+                self.x_f_ub[4],
+                max(dt_min, self.VARIABLE_TIMESTEP_MAX_FACTOR * interval_guess),
+            )
+        return dt_min, dt_max, min(max(interval_guess, dt_min), dt_max)
 
     def _normalize_waypoints(self, waypoints: Any = None) -> list[LatLon]:
         if waypoints is None:
