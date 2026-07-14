@@ -1,7 +1,10 @@
 """Tests for waypoint-constrained trajectories."""
 
+from math import pi
+
 import openap
 import pytest
+from openap.aero import fpm
 
 import opentop as top
 import pandas as pd
@@ -36,6 +39,8 @@ def test_cruise_waypoint_solution_passes_near_waypoint(aircraft_type, short_flig
     ]
     assert min(distances) <= 10_500
     assert df.ts.diff().dropna().gt(0).all()
+    vertical_acceleration = (df.vertical_rate.diff() / df.ts.diff()).dropna()
+    assert vertical_acceleration.abs().max() <= 5.1
 
 
 def test_waypoint_variable_timestep_supports_time_objective(
@@ -107,6 +112,21 @@ def test_variable_timestep_default_bounds_are_moderately_relaxed():
     assert dt_min == pytest.approx(0.65 * interval_guess)
     assert dt_max == pytest.approx(1.65 * interval_guess)
     assert dt_guess == pytest.approx(interval_guess)
+
+
+def test_control_change_rate_uses_each_interval_duration():
+    opt = top.Cruise("A320", "EHAM", "LIRF", 0.85)
+    opt._variable_timestep = True
+    opt._interval_dts = [10.0, 20.0]
+    controls = [
+        [0.7, 0.0, 0.0],
+        [0.7, 50 * fpm, 5 * pi / 180],
+        [0.7, 100 * fpm, 10 * pi / 180],
+    ]
+
+    assert opt._control_change_rate(controls, 0, 1) == pytest.approx(5 * fpm)
+    assert opt._control_change_rate(controls, 1, 1) == pytest.approx(2.5 * fpm)
+    assert opt._control_change_rate(controls, 0, 2) == pytest.approx(0.5 * pi / 180)
 
 
 @pytest.mark.parametrize(

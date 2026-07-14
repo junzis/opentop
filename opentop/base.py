@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 class Base:
     BADA4_MIN_FUELFLOW_KG_S: ClassVar[float] = 0.05
     MASS_CONSTRAINT_TOL_KG: ClassVar[float] = 1e-3
+    MAX_TURN_RATE: ClassVar[float] = 0.5 * np.pi / 180
+    MAX_VERTICAL_ACCELERATION: ClassVar[float] = 5 * fpm
     VARIABLE_TIMESTEP_MIN_FACTOR: ClassVar[float] = 0.65
     VARIABLE_TIMESTEP_MAX_FACTOR: ClassVar[float] = 1.65
 
@@ -621,6 +623,10 @@ class Base:
         if getattr(self, "_variable_timestep", False):
             return self._interval_dts[k]
         return self.dt
+
+    def _control_change_rate(self, U: list[Any], k: int, component: int) -> Any:
+        """Return the control change from interval k to k + 1 per second."""
+        return (U[k + 1][component] - U[k][component]) / self._interval_dt(k)
 
     def _variable_timestep_bounds(
         self,

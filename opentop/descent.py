@@ -226,16 +226,22 @@ class Descent(Base):
         for k in range(1, self.nodes):
             opti.subject_to(opti.bounded(-0.1, U[k][0] - U[k - 1][0], 0.1))  # type: ignore[arg-type]  # CasADi stubs wrong
 
-        # Smooth vertical rate changes
+        # Limit vertical acceleration independently of interval duration
         for k in range(1, self.nodes):
+            vertical_acceleration = self._control_change_rate(U, k - 1, 1)
             opti.subject_to(
-                opti.bounded(-1000 * fpm, U[k][1] - U[k - 1][1], 1000 * fpm)  # type: ignore[arg-type]  # CasADi stubs wrong
+                opti.bounded(
+                    -self.MAX_VERTICAL_ACCELERATION,
+                    vertical_acceleration,
+                    self.MAX_VERTICAL_ACCELERATION,
+                )  # type: ignore[arg-type]  # CasADi stubs wrong
             )
 
-        # Smooth heading changes
+        # Limit turn rate independently of interval duration
         for k in range(1, self.nodes):
+            turn_rate = self._control_change_rate(U, k - 1, 2)
             opti.subject_to(
-                opti.bounded(-5 * pi / 180, U[k][2] - U[k - 1][2], 5 * pi / 180)  # type: ignore[arg-type]  # CasADi stubs wrong
+                opti.bounded(-self.MAX_TURN_RATE, turn_rate, self.MAX_TURN_RATE)  # type: ignore[arg-type]  # CasADi stubs wrong
             )
 
         # Force and energy constraints

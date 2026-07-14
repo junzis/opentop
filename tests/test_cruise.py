@@ -77,7 +77,10 @@ class TestCruise:
         assert df.mass.iloc[-1] < df.mass.iloc[0]
 
     def test_vertical_rate_change_is_smooth(self, cruise_df):
-        assert cruise_df.vertical_rate.diff().dropna().abs().max() <= 500
+        vertical_acceleration = (
+            cruise_df.vertical_rate.diff() / cruise_df.ts.diff()
+        ).dropna()
+        assert vertical_acceleration.abs().max() <= 5.1
 
 
 def test_cruise_accepts_constructor_altitude_bounds(aircraft_type, short_flight):
