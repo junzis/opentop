@@ -1,5 +1,6 @@
 """Tests for the Descent trajectory optimizer."""
 
+import casadi as ca
 import pytest
 
 import opentop as top
@@ -65,3 +66,28 @@ class TestDescent:
         df = descent_full_df
         assert "fuel_cost" in df.columns
         assert (df["fuel_cost"].dropna() >= 0).all()
+
+    def test_max_duration_must_be_positive(self, descent_optimizer, descent_full_df):
+        with pytest.raises(ValueError, match="finite and positive"):
+            descent_optimizer.init_conditions(descent_full_df, max_duration_s=0.0)
+
+    def test_inbound_route_side_adds_one_constraint_per_interior_node(
+        self, descent_optimizer
+    ):
+        descent_optimizer._route_xy = [(0.0, 0.0), (0.0, 10.0)]
+        descent_optimizer._route_anchor_nodes = [0, 3, descent_optimizer.nodes]
+        opti = ca.Opti()
+        states = [opti.variable(5) for _ in range(descent_optimizer.nodes + 1)]
+
+        descent_optimizer._constrain_inbound_route_side(
+            opti, states, inbound_route_side="right"
+        )
+
+        assert opti.g.numel() == 2
+
+    def test_inbound_route_side_rejects_unknown_side(self, descent_optimizer):
+        opti = ca.Opti()
+        with pytest.raises(ValueError, match="inbound_route_side"):
+            descent_optimizer._constrain_inbound_route_side(
+                opti, [], inbound_route_side="up"
+            )

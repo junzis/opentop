@@ -130,10 +130,20 @@ for flight in flights:
 result = opentop.MultiAircraft(flights, common_altitude=True).trajectory()
 ```
 
-The initial implementation supports uniform-timestep `Cruise` fuel
-optimization. Wind, waypoints/variable timesteps, time-dependent 4D grid
-objectives, and other phases are rejected explicitly until their fleet timing
-semantics are implemented.
+`Descent` optimizers can also be coordinated. List flights in the desired
+landing order and use `minimum_arrival_gap_s` to enforce a runway sequence.
+Shared final-approach points can be supplied with ordered waypoint constraints.
+For structured arrivals, `route_heading_tolerance_deg` keeps each route leg
+near its nominal bearing, while `max_duration_s` can impose an operational
+descent-time bound without adding time to the objective.
+See the
+[coordinated-arrivals notebook](examples/multi_aircraft_arrivals.ipynb) for a
+three-aircraft runway-arrival example.
+
+The implementation supports uniform-timestep `Cruise` and `Descent`
+optimization, including ordered waypoint constraints. Wind, variable
+timesteps, time-dependent 4D grid objectives, and other phases are rejected
+explicitly until their fleet timing semantics are implemented.
 
 ### Wind integration
 

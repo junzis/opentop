@@ -1,4 +1,4 @@
-"""Joint separation-constrained optimization of multiple cruise flights."""
+"""Joint separation-constrained optimization of multiple flight phases."""
 
 from __future__ import annotations
 
@@ -25,30 +25,41 @@ from ._separation import (
 )
 from ._transcription import AircraftTranscription
 from .cruise import Cruise
+from .descent import Descent
 
 
 @dataclass(frozen=True, slots=True)
 class FlightSpec:
-    """One flight participating in a joint optimization."""
+    """One flight participating in a joint optimization.
+
+    ``options`` apply to both the independent warm start and joint solve.
+    ``joint_options`` override them only while building the shared NLP.
+    """
 
     id: str
-    optimizer: Cruise
+    optimizer: Cruise | Descent
     start_time: float = 0.0
     objective: str | Callable[..., Any] = "fuel"
     weight: float = 1.0
     initial_guess: pd.DataFrame | None = None
     options: Mapping[str, Any] = field(default_factory=dict)
+    joint_options: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip():
             raise ValueError("flight id must be a non-empty string")
-        if not isinstance(self.optimizer, Cruise):
-            raise TypeError("MultiAircraft currently supports Cruise optimizers only")
+        if not isinstance(self.optimizer, (Cruise, Descent)):
+            raise TypeError(
+                "MultiAircraft currently supports Cruise and Descent optimizers only"
+            )
         if not isfinite(self.start_time):
             raise ValueError("start_time must be finite")
         if not isfinite(self.weight) or self.weight <= 0:
             raise ValueError("weight must be finite and positive")
         object.__setattr__(self, "options", MappingProxyType(dict(self.options)))
+        object.__setattr__(
+            self, "joint_options", MappingProxyType(dict(self.joint_options))
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +124,7 @@ def _fleet_projection(flights: tuple[FlightSpec, ...], center: tuple[float, floa
 
 
 class MultiAircraft:
-    """Coordinate multiple Cruise optimizers in one shared CasADi Opti NLP."""
+    """Coordinate multiple phase optimizers in one shared CasADi Opti NLP."""
 
     def __init__(
         self,
@@ -125,6 +136,7 @@ class MultiAircraft:
         max_iter: int | None = None,
         ipopt_kwargs: Mapping[str, Any] | None = None,
         common_altitude: bool = False,
+        minimum_arrival_gap_s: float | None = None,
     ) -> None:
         if not flights:
             raise ValueError("at least one flight is required")
@@ -138,31 +150,42 @@ class MultiAircraft:
         self.max_iter = max_iter
         self.ipopt_kwargs = dict(ipopt_kwargs or {})
         self.common_altitude = bool(common_altitude)
+        if minimum_arrival_gap_s is not None and (
+            not isfinite(minimum_arrival_gap_s) or minimum_arrival_gap_s <= 0
+        ):
+            raise ValueError("minimum_arrival_gap_s must be finite and positive")
+        self.minimum_arrival_gap_s = minimum_arrival_gap_s
         self._validate_scope()
 
     def _validate_scope(self) -> None:
         for flight in self.flights:
             optimizer = flight.optimizer
-            if self.common_altitude and not optimizer.fix_alt:
-                raise ValueError(
-                    "common_altitude requires fix_cruise_altitude() on every flight"
-                )
+            if self.common_altitude:
+                if not isinstance(optimizer, Cruise):
+                    raise ValueError(
+                        "common_altitude is supported for Cruise optimizers only"
+                    )
+                if not optimizer.fix_alt:
+                    raise ValueError(
+                        "common_altitude requires fix_cruise_altitude() on every flight"
+                    )
             if optimizer.wind is not None:
                 raise NotImplementedError(
                     "MultiAircraft does not yet support projection-dependent "
                     "wind models"
                 )
-            if flight.objective != "fuel":
-                raise NotImplementedError(
-                    "the initial MultiAircraft implementation supports objective='fuel'"
+            if self.minimum_arrival_gap_s is not None and not isinstance(
+                optimizer, Descent
+            ):
+                raise ValueError(
+                    "minimum_arrival_gap_s is supported for Descent optimizers only"
                 )
             options = dict(flight.options)
             if "initial_guess" in options:
                 raise ValueError("set initial_guess on FlightSpec, not in options")
-            if options.get("variable_timestep", False) or options.get("waypoints"):
+            if options.get("variable_timestep", False):
                 raise NotImplementedError(
-                    "MultiAircraft currently requires uniform timesteps and "
-                    "no waypoints"
+                    "MultiAircraft currently requires uniform timesteps"
                 )
             if options.get("interpolant") is not None and options.get(
                 "time_dependent", False
@@ -246,12 +269,28 @@ class MultiAircraft:
         trajectories = {}
         for index, flight in enumerate(self.flights):
             options = dict(flight.options)
-            df = flight.optimizer.trajectory(
-                objective=flight.objective,
-                initial_guess=flight.initial_guess,
-                return_failed=True,
-                **options,
-            )
+            # Fleet-time interpolation currently assumes equal interval
+            # durations. Waypoint-constrained warm starts must use that same
+            # uniform grid even though phase optimizers normally enable
+            # variable timesteps automatically when waypoints are present.
+            options["variable_timestep"] = False
+            if isinstance(flight.optimizer, Cruise):
+                df = flight.optimizer.trajectory(
+                    objective=flight.objective,
+                    initial_guess=flight.initial_guess,
+                    return_failed=True,
+                    **options,
+                )
+            else:
+                # Keep all descent nodes for candidate-time detection and
+                # collocation warm starts, even if the public single-phase
+                # default would remove an initial level segment.
+                options["remove_cruise"] = False
+                df = flight.optimizer.trajectory(
+                    objective=flight.objective,
+                    initial_guess=flight.initial_guess,
+                    **options,
+                )
             if not isinstance(df, pd.DataFrame) or df.empty:
                 raise RuntimeError(
                     f"independent warm-start solve failed for {flight.id}"
@@ -317,7 +356,7 @@ class MultiAircraft:
                 guesses[index] = source
                 continue
             offset = index - midpoint
-            if flight.optimizer.fix_alt:
+            if getattr(flight.optimizer, "fix_alt", False):
                 guesses[index] = _perturb_guess(
                     source,
                     lateral_km=offset,
@@ -325,13 +364,42 @@ class MultiAircraft:
                     proj=flight.optimizer.proj,
                 )
             else:
-                guesses[index] = _perturb_guess(
-                    source,
-                    lateral_km=0.0,
-                    altitude_ft=500.0 * offset,
-                    proj=flight.optimizer.proj,
+                guess = source.copy()
+                # Taper the vertical stagger to preserve both fixed endpoint
+                # altitudes. Adjacent warm starts differ by up to 2,000 ft,
+                # placing their shared-route interiors outside the nominal
+                # 1,000 ft vertical conflict scale.
+                progress = np.linspace(0.0, 1.0, len(source))
+                guess["altitude"] = source.altitude + (
+                    2_000.0 * offset * np.sin(np.pi * progress)
                 )
-        return guesses
+                guesses[index] = guess
+        return self._arrival_spacing_guesses(guesses)
+
+    def _arrival_spacing_guesses(
+        self, guesses: dict[int, pd.DataFrame]
+    ) -> dict[int, pd.DataFrame]:
+        """Retimestamp descent guesses to satisfy the requested landing order."""
+        if self.minimum_arrival_gap_s is None:
+            return guesses
+
+        spaced = {}
+        previous_end = None
+        for index, flight in enumerate(self.flights):
+            guess = guesses[index].copy()
+            relative = guess.ts.to_numpy(dtype=float) - float(guess.ts.iloc[0])
+            duration = float(relative[-1])
+            if duration <= 0:
+                raise ValueError("arrival initial guess duration must be positive")
+            natural_end = flight.start_time + duration
+            target_end = natural_end
+            if previous_end is not None:
+                target_end = max(target_end, previous_end + self.minimum_arrival_gap_s)
+            target_duration = target_end - flight.start_time
+            guess.loc[:, "ts"] = relative * (target_duration / duration)
+            spaced[index] = guess
+            previous_end = target_end
+        return spaced
 
     def _build_problem(
         self,
@@ -352,8 +420,9 @@ class MultiAircraft:
         common_altitude_state = None
         for index, flight in enumerate(self.flights):
             options = dict(flight.options)
+            options.update(flight.joint_options)
             options.pop("variable_timestep", None)
-            options.pop("waypoints", None)
+            options.pop("remove_cruise", None)
             options.setdefault(
                 "route_margin_m", max(50_000.0, 4 * self.separation.horizontal_m)
             )
@@ -383,6 +452,16 @@ class MultiAircraft:
         separation_constraints = self._add_separation_constraints(
             opti, transcriptions, references, pair_times
         )
+        if self.minimum_arrival_gap_s is not None:
+            for index in range(len(self.flights) - 1):
+                first_end = (
+                    self.flights[index].start_time + transcriptions[index].ts_final
+                )
+                second_end = (
+                    self.flights[index + 1].start_time
+                    + transcriptions[index + 1].ts_final
+                )
+                opti.subject_to(second_end - first_end >= self.minimum_arrival_gap_s)
         x_initial = opti.debug.value(opti.x, opti.initial())
         objective_at_initial = ca.Function(
             f"fleet_objective_at_initial_{refinement}", [opti.x], [total_raw]
@@ -516,6 +595,7 @@ class MultiAircraft:
             )
             duration = float(solution.value(transcription.ts_final))
             options = dict(flight.options)
+            options.update(flight.joint_options)
             df = flight.optimizer.to_trajectory(
                 duration,
                 x_opt,
@@ -524,6 +604,10 @@ class MultiAircraft:
                 n_dim=options.get("n_dim"),
                 time_dependent=options.get("time_dependent", False),
             )
+            if isinstance(flight.optimizer, Descent) and options.get(
+                "remove_cruise", False
+            ):
+                df = df.query("vertical_rate < -100")
             df = df.assign(absolute_ts=flight.start_time + df.ts)
             trajectories[flight.id] = df
             objective = float(solution.value(transcription.objective_raw))
