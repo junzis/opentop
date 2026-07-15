@@ -7868,13 +7868,9 @@ a.anchor-link {
             <span class="n">common_altitude</span><span class="o">=</span><span class="n">common_altitude</span><span class="p">,</span>
         <span class="p">)</span><span class="o">.</span><span class="n">trajectory</span><span class="p">()</span>
         <span class="n">results</span><span class="p">[</span><span class="n">count</span><span class="p">]</span> <span class="o">=</span> <span class="n">result</span>
-        <span class="n">reports</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
-            <span class="n">asdict</span><span class="p">(</span><span class="n">report</span><span class="p">)</span> <span class="k">for</span> <span class="n">report</span> <span class="ow">in</span> <span class="n">result</span><span class="o">.</span><span class="n">pair_reports</span>
-        <span class="p">)</span>
+        <span class="n">reports</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">asdict</span><span class="p">(</span><span class="n">report</span><span class="p">)</span> <span class="k">for</span> <span class="n">report</span> <span class="ow">in</span> <span class="n">result</span><span class="o">.</span><span class="n">pair_reports</span><span class="p">)</span>
         <span class="n">reports_by_count</span><span class="p">[</span><span class="n">count</span><span class="p">]</span> <span class="o">=</span> <span class="n">reports</span>
-        <span class="n">worst</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span>
-            <span class="n">result</span><span class="o">.</span><span class="n">pair_reports</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">report</span><span class="p">:</span> <span class="n">report</span><span class="o">.</span><span class="n">minimum_metric</span>
-        <span class="p">)</span>
+        <span class="n">worst</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">pair_reports</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">report</span><span class="p">:</span> <span class="n">report</span><span class="o">.</span><span class="n">minimum_metric</span><span class="p">)</span>
         <span class="n">row</span> <span class="o">=</span> <span class="p">{</span>
             <span class="s2">"aircraft"</span><span class="p">:</span> <span class="n">count</span><span class="p">,</span>
             <span class="s2">"passed"</span><span class="p">:</span> <span class="n">result</span><span class="o">.</span><span class="n">success</span> <span class="ow">and</span> <span class="n">result</span><span class="o">.</span><span class="n">separation_success</span><span class="p">,</span>
@@ -7888,12 +7884,16 @@ a.anchor-link {
         <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">row</span><span class="p">)</span>
 
     <span class="n">summary</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">"aircraft"</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">results</span><span class="p">,</span> <span class="n">reports_by_count</span><span class="p">,</span> <span class="n">summary</span><span class="o">.</span><span class="n">round</span><span class="p">(</span>
-        <span class="p">{</span>
-            <span class="s2">"min metric"</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
-            <span class="s2">"solve (s)"</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
-            <span class="s2">"shared altitude (ft)"</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
-        <span class="p">}</span>
+    <span class="k">return</span> <span class="p">(</span>
+        <span class="n">results</span><span class="p">,</span>
+        <span class="n">reports_by_count</span><span class="p">,</span>
+        <span class="n">summary</span><span class="o">.</span><span class="n">round</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">"min metric"</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+                <span class="s2">"solve (s)"</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+                <span class="s2">"shared altitude (ft)"</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">),</span>
     <span class="p">)</span>
 </pre></div>
 </div>
@@ -7926,9 +7926,7 @@ a.anchor-link {
     <span class="n">flights</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">count</span><span class="p">):</span>
         <span class="n">bearing</span> <span class="o">=</span> <span class="mf">360.0</span> <span class="o">*</span> <span class="n">index</span> <span class="o">/</span> <span class="n">count</span>
-        <span class="n">origin</span> <span class="o">=</span> <span class="n">openap</span><span class="o">.</span><span class="n">aero</span><span class="o">.</span><span class="n">latlon</span><span class="p">(</span>
-            <span class="n">center_lat</span><span class="p">,</span> <span class="n">center_lon</span><span class="p">,</span> <span class="n">half_route_m</span><span class="p">,</span> <span class="n">bearing</span>
-        <span class="p">)</span>
+        <span class="n">origin</span> <span class="o">=</span> <span class="n">openap</span><span class="o">.</span><span class="n">aero</span><span class="o">.</span><span class="n">latlon</span><span class="p">(</span><span class="n">center_lat</span><span class="p">,</span> <span class="n">center_lon</span><span class="p">,</span> <span class="n">half_route_m</span><span class="p">,</span> <span class="n">bearing</span><span class="p">)</span>
         <span class="n">destination</span> <span class="o">=</span> <span class="n">openap</span><span class="o">.</span><span class="n">aero</span><span class="o">.</span><span class="n">latlon</span><span class="p">(</span>
             <span class="n">center_lat</span><span class="p">,</span> <span class="n">center_lon</span><span class="p">,</span> <span class="n">half_route_m</span><span class="p">,</span> <span class="p">(</span><span class="n">bearing</span> <span class="o">+</span> <span class="mf">180.0</span><span class="p">)</span> <span class="o">%</span> <span class="mf">360.0</span>
         <span class="p">)</span>
@@ -7989,9 +7987,7 @@ a.anchor-link {
 <div class="jp-InputPrompt jp-InputArea-prompt">In [4]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="n">free_results</span><span class="p">,</span> <span class="n">free_pair_reports</span><span class="p">,</span> <span class="n">free_summary</span> <span class="o">=</span> <span class="n">solve_scenarios</span><span class="p">(</span>
-    <span class="n">free_scenarios</span>
-<span class="p">)</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="n">free_results</span><span class="p">,</span> <span class="n">free_pair_reports</span><span class="p">,</span> <span class="n">free_summary</span> <span class="o">=</span> <span class="n">solve_scenarios</span><span class="p">(</span><span class="n">free_scenarios</span><span class="p">)</span>
 <span class="n">free_summary</span>
 </pre></div>
 </div>
@@ -8042,35 +8038,35 @@ a.anchor-link {
 <td>True</td>
 <td>AC1 / AC2</td>
 <td>1.324</td>
-<td>14.8</td>
+<td>14.6</td>
 </tr>
 <tr>
 <th>3</th>
 <td>True</td>
 <td>AC1 / AC3</td>
 <td>1.311</td>
-<td>18.0</td>
+<td>17.9</td>
 </tr>
 <tr>
 <th>4</th>
 <td>True</td>
 <td>AC2 / AC3</td>
 <td>1.699</td>
-<td>86.4</td>
+<td>87.7</td>
 </tr>
 <tr>
 <th>6</th>
 <td>True</td>
 <td>AC5 / AC6</td>
 <td>3.133</td>
-<td>112.3</td>
+<td>113.2</td>
 </tr>
 <tr>
 <th>8</th>
 <td>True</td>
 <td>AC7 / AC8</td>
 <td>1.307</td>
-<td>121.4</td>
+<td>122.0</td>
 </tr>
 </tbody>
 </table>
@@ -8118,25 +8114,15 @@ a.anchor-link {
     <span class="n">trajectory_count</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">trajectories</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="p">(</span><span class="n">flight_id</span><span class="p">,</span> <span class="n">trajectory</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">trajectories</span><span class="o">.</span><span class="n">items</span><span class="p">()):</span>
         <span class="n">lane</span> <span class="o">=</span> <span class="n">index</span> <span class="o">-</span> <span class="p">(</span><span class="n">trajectory_count</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">/</span> <span class="mi">2</span>
-        <span class="n">d_lon</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span>
-            <span class="n">trajectory</span><span class="o">.</span><span class="n">longitude</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">trajectory</span><span class="o">.</span><span class="n">longitude</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-        <span class="p">)</span>
-        <span class="n">d_lat</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span>
-            <span class="n">trajectory</span><span class="o">.</span><span class="n">latitude</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">trajectory</span><span class="o">.</span><span class="n">latitude</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-        <span class="p">)</span>
+        <span class="n">d_lon</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">trajectory</span><span class="o">.</span><span class="n">longitude</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">trajectory</span><span class="o">.</span><span class="n">longitude</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="n">d_lat</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">trajectory</span><span class="o">.</span><span class="n">latitude</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">trajectory</span><span class="o">.</span><span class="n">latitude</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
         <span class="n">route_norm</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">hypot</span><span class="p">(</span><span class="n">d_lon</span><span class="p">,</span> <span class="n">d_lat</span><span class="p">),</span> <span class="mf">1e-12</span><span class="p">)</span>
         <span class="n">route_offset_deg</span> <span class="o">=</span> <span class="mf">0.012</span> <span class="o">*</span> <span class="n">lane</span>
-        <span class="n">display_longitude</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">trajectory</span><span class="o">.</span><span class="n">longitude</span> <span class="o">-</span> <span class="n">d_lat</span> <span class="o">/</span> <span class="n">route_norm</span> <span class="o">*</span> <span class="n">route_offset_deg</span>
-        <span class="p">)</span>
-        <span class="n">display_latitude</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">trajectory</span><span class="o">.</span><span class="n">latitude</span> <span class="o">+</span> <span class="n">d_lon</span> <span class="o">/</span> <span class="n">route_norm</span> <span class="o">*</span> <span class="n">route_offset_deg</span>
-        <span class="p">)</span>
+        <span class="n">display_longitude</span> <span class="o">=</span> <span class="n">trajectory</span><span class="o">.</span><span class="n">longitude</span> <span class="o">-</span> <span class="n">d_lat</span> <span class="o">/</span> <span class="n">route_norm</span> <span class="o">*</span> <span class="n">route_offset_deg</span>
+        <span class="n">display_latitude</span> <span class="o">=</span> <span class="n">trajectory</span><span class="o">.</span><span class="n">latitude</span> <span class="o">+</span> <span class="n">d_lon</span> <span class="o">/</span> <span class="n">route_norm</span> <span class="o">*</span> <span class="n">route_offset_deg</span>
         <span class="n">display_altitude</span> <span class="o">=</span> <span class="n">trajectory</span><span class="o">.</span><span class="n">altitude</span> <span class="o">+</span> <span class="mf">100.0</span> <span class="o">*</span> <span class="n">lane</span>
 
-        <span class="n">route_ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span>
-            <span class="n">display_longitude</span><span class="p">,</span> <span class="n">display_latitude</span><span class="p">,</span> <span class="n">marker</span><span class="o">=</span><span class="s2">"o"</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">flight_id</span>
-        <span class="p">)</span>
+        <span class="n">route_ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">display_longitude</span><span class="p">,</span> <span class="n">display_latitude</span><span class="p">,</span> <span class="n">marker</span><span class="o">=</span><span class="s2">"o"</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">flight_id</span><span class="p">)</span>
         <span class="n">altitude_ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span>
             <span class="n">trajectory</span><span class="o">.</span><span class="n">absolute_ts</span> <span class="o">/</span> <span class="mf">60.0</span><span class="p">,</span>
             <span class="n">display_altitude</span><span class="p">,</span>
@@ -8232,9 +8218,7 @@ a.anchor-link {
     <span class="n">flights</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">count</span><span class="p">):</span>
         <span class="n">bearing</span> <span class="o">=</span> <span class="mf">180.0</span> <span class="o">*</span> <span class="n">index</span> <span class="o">/</span> <span class="n">count</span>
-        <span class="n">origin</span> <span class="o">=</span> <span class="n">openap</span><span class="o">.</span><span class="n">aero</span><span class="o">.</span><span class="n">latlon</span><span class="p">(</span>
-            <span class="n">center_lat</span><span class="p">,</span> <span class="n">center_lon</span><span class="p">,</span> <span class="n">half_route_m</span><span class="p">,</span> <span class="n">bearing</span>
-        <span class="p">)</span>
+        <span class="n">origin</span> <span class="o">=</span> <span class="n">openap</span><span class="o">.</span><span class="n">aero</span><span class="o">.</span><span class="n">latlon</span><span class="p">(</span><span class="n">center_lat</span><span class="p">,</span> <span class="n">center_lon</span><span class="p">,</span> <span class="n">half_route_m</span><span class="p">,</span> <span class="n">bearing</span><span class="p">)</span>
         <span class="n">destination</span> <span class="o">=</span> <span class="n">openap</span><span class="o">.</span><span class="n">aero</span><span class="o">.</span><span class="n">latlon</span><span class="p">(</span>
             <span class="n">center_lat</span><span class="p">,</span> <span class="n">center_lon</span><span class="p">,</span> <span class="n">half_route_m</span><span class="p">,</span> <span class="p">(</span><span class="n">bearing</span> <span class="o">+</span> <span class="mf">180.0</span><span class="p">)</span> <span class="o">%</span> <span class="mf">360.0</span>
         <span class="p">)</span>
@@ -8257,8 +8241,7 @@ a.anchor-link {
 
 
 <span class="n">common_altitude_scenarios</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="n">count</span><span class="p">:</span> <span class="n">build_common_altitude_scenario</span><span class="p">(</span><span class="n">count</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">scenario_sizes</span>
+    <span class="n">count</span><span class="p">:</span> <span class="n">build_common_altitude_scenario</span><span class="p">(</span><span class="n">count</span><span class="p">)</span> <span class="k">for</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">scenario_sizes</span>
 <span class="p">}</span>
 <span class="p">{</span><span class="n">count</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">flights</span><span class="p">)</span> <span class="k">for</span> <span class="n">count</span><span class="p">,</span> <span class="n">flights</span> <span class="ow">in</span> <span class="n">common_altitude_scenarios</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
 </pre></div>
@@ -8352,7 +8335,7 @@ a.anchor-link {
 <td>True</td>
 <td>AC1 / AC2</td>
 <td>1.310</td>
-<td>16.2</td>
+<td>16.1</td>
 <td>33762.0</td>
 </tr>
 <tr>
@@ -8360,7 +8343,7 @@ a.anchor-link {
 <td>True</td>
 <td>AC1 / AC2</td>
 <td>1.308</td>
-<td>19.4</td>
+<td>19.6</td>
 <td>33754.0</td>
 </tr>
 <tr>
@@ -8376,7 +8359,7 @@ a.anchor-link {
 <td>True</td>
 <td>AC1 / AC2</td>
 <td>1.308</td>
-<td>36.3</td>
+<td>36.6</td>
 <td>33649.0</td>
 </tr>
 <tr>
@@ -8384,7 +8367,7 @@ a.anchor-link {
 <td>True</td>
 <td>AC7 / AC8</td>
 <td>1.306</td>
-<td>85.3</td>
+<td>85.8</td>
 <td>33581.0</td>
 </tr>
 </tbody>
@@ -8406,8 +8389,7 @@ a.anchor-link {
 <span class="k">assert</span> <span class="nb">all</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">separation_success</span> <span class="k">for</span> <span class="n">result</span> <span class="ow">in</span> <span class="n">common_results</span><span class="o">.</span><span class="n">values</span><span class="p">())</span>
 <span class="k">for</span> <span class="n">result</span> <span class="ow">in</span> <span class="n">common_results</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
     <span class="n">altitudes</span> <span class="o">=</span> <span class="p">[</span>
-        <span class="n">trajectory</span><span class="o">.</span><span class="n">altitude</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
-        <span class="k">for</span> <span class="n">trajectory</span> <span class="ow">in</span> <span class="n">result</span><span class="o">.</span><span class="n">trajectories</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+        <span class="n">trajectory</span><span class="o">.</span><span class="n">altitude</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span> <span class="k">for</span> <span class="n">trajectory</span> <span class="ow">in</span> <span class="n">result</span><span class="o">.</span><span class="n">trajectories</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
     <span class="p">]</span>
     <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">ptp</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">altitudes</span><span class="p">))</span> <span class="o">&lt;=</span> <span class="mf">1e-6</span>
 </pre></div>
@@ -8461,9 +8443,7 @@ a.anchor-link {
             <span class="n">label</span><span class="o">=</span><span class="n">flight_id</span><span class="p">,</span>
         <span class="p">)</span>
 
-    <span class="n">worst_report</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span>
-        <span class="n">result</span><span class="o">.</span><span class="n">pair_reports</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">report</span><span class="p">:</span> <span class="n">report</span><span class="o">.</span><span class="n">minimum_metric</span>
-    <span class="p">)</span>
+    <span class="n">worst_report</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">pair_reports</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">report</span><span class="p">:</span> <span class="n">report</span><span class="o">.</span><span class="n">minimum_metric</span><span class="p">)</span>
     <span class="n">other_label_available</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="k">for</span> <span class="n">report</span> <span class="ow">in</span> <span class="n">result</span><span class="o">.</span><span class="n">pair_reports</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">report</span> <span class="o">==</span> <span class="n">worst_report</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">report</span><span class="o">.</span><span class="n">overlaps</span><span class="p">:</span>
@@ -8491,9 +8471,7 @@ a.anchor-link {
         <span class="n">lw</span><span class="o">=</span><span class="mf">2.2</span><span class="p">,</span>
         <span class="n">label</span><span class="o">=</span><span class="sa">f</span><span class="s2">"worst: </span><span class="si">{</span><span class="n">worst_report</span><span class="o">.</span><span class="n">first</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">worst_report</span><span class="o">.</span><span class="n">second</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
     <span class="p">)</span>
-    <span class="n">distance_ax</span><span class="o">.</span><span class="n">axhline</span><span class="p">(</span>
-        <span class="n">required_nm</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">"tab:red"</span><span class="p">,</span> <span class="n">ls</span><span class="o">=</span><span class="s2">"--"</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"required"</span>
-    <span class="p">)</span>
+    <span class="n">distance_ax</span><span class="o">.</span><span class="n">axhline</span><span class="p">(</span><span class="n">required_nm</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">"tab:red"</span><span class="p">,</span> <span class="n">ls</span><span class="o">=</span><span class="s2">"--"</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"required"</span><span class="p">)</span>
     <span class="n">distance_ax</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span>
         <span class="n">worst_report</span><span class="o">.</span><span class="n">worst_time</span> <span class="o">/</span> <span class="mf">60.0</span><span class="p">,</span>
         <span class="n">worst_report</span><span class="o">.</span><span class="n">horizontal_m</span> <span class="o">/</span> <span class="mf">1852.0</span><span class="p">,</span>
@@ -8517,9 +8495,7 @@ a.anchor-link {
         <span class="n">axis</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="n">ls</span><span class="o">=</span><span class="s2">":"</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.7</span><span class="p">)</span>
         <span class="n">axis</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
     <span class="n">shared_altitude</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">trajectories</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span><span class="o">.</span><span class="n">altitude</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-    <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">count</span><span class="si">}</span><span class="s2"> aircraft — common altitude </span><span class="si">{</span><span class="n">shared_altitude</span><span class="si">:</span><span class="s2">,.0f</span><span class="si">}</span><span class="s2"> ft"</span>
-    <span class="p">)</span>
+    <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">count</span><span class="si">}</span><span class="s2"> aircraft — common altitude </span><span class="si">{</span><span class="n">shared_altitude</span><span class="si">:</span><span class="s2">,.0f</span><span class="si">}</span><span class="s2"> ft"</span><span class="p">)</span>
     <span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
     <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 
