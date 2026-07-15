@@ -19,6 +19,7 @@ except ImportError:
 
 from . import _dynamics, _objectives, _trajectory
 from ._performance import build_performance_models
+from ._transcription import AircraftTranscription
 from ._types import LatLon
 
 if TYPE_CHECKING:
@@ -139,6 +140,7 @@ class Base:
         self.emission = models.emission
 
         self.wind = None
+        self._projection_center: tuple[float, float] | None = None
 
         # Check cruise range
         self.range = oc.geo.distance(self.lat1, self.lon1, self.lat2, self.lon2)
@@ -222,8 +224,12 @@ class Base:
         Returns:
             tuple: (x, y) in meters, or (lon, lat) if inverse.
         """
-        lat0 = (self.lat1 + self.lat2) / 2
-        lon0 = (self.lon1 + self.lon2) / 2
+        projection_center = getattr(self, "_projection_center", None)
+        if projection_center is None:
+            lat0 = (self.lat1 + self.lat2) / 2
+            lon0 = (self.lon1 + self.lon2) / 2
+        else:
+            lat0, lon0 = projection_center
 
         if symbolic:
             geo, trig = oc.geo, ca
@@ -394,7 +400,7 @@ class Base:
         for key, value in ipopt_kwargs.items():
             self.solver_options[f"ipopt.{key}"] = value
 
-    def init_model(self, objective, **kwargs):
+    def init_model(self, objective, *, function_name: str = "f", **kwargs):
         """Build the symbolic dynamics function for the given objective.
 
         Creates self.x (states), self.u (controls), and self.func_dynamics.
@@ -437,7 +443,7 @@ class Base:
 
         # Continuous time dynamics
         self.func_dynamics = ca.Function(
-            "f",
+            function_name,
             [self.x, self.u, interval_dt],
             [self.xdot(self.x, self.u), L],
             ["x", "u", "dt"],
@@ -462,7 +468,32 @@ class Base:
             tuple: (X, U) where X is list of state MX vars at each node boundary
                    (length nodes+1), U is list of control MX vars (length nodes).
         """
-        self._opti = ca.Opti()
+        opti = ca.Opti()
+        transcription = self._add_transcription(
+            opti,
+            objective,
+            ts_final_guess,
+            minimize=True,
+            **kwargs,
+        )
+        return transcription.X, transcription.U
+
+    def _add_transcription(
+        self,
+        opti: ca.Opti,
+        objective: Any,
+        ts_final_guess: float,
+        *,
+        minimize: bool = False,
+        name_prefix: str = "flight",
+        **kwargs: Any,
+    ) -> AircraftTranscription:
+        """Add one aircraft's direct-collocation transcription to ``opti``.
+
+        Unlike :meth:`_build_opti`, this method can target an existing shared
+        Opti stack and does not set an objective unless ``minimize`` is true.
+        """
+        self._opti = opti
 
         # Grid-cost interpolants (bspline) need IPOPT's exact Hessian for
         # numerical stability. For string objective specs this is driven by
@@ -486,7 +517,7 @@ class Base:
             self.solver_options["ipopt.hessian_approximation"] = "exact"
 
         # Free final time — must be set before init_model
-        self.ts_final = self._opti.variable()
+        self.ts_final = opti.variable()
         self._opti.subject_to(self.ts_final >= 0)
         self._opti.set_initial(self.ts_final, ts_final_guess)
         self.dt = self.ts_final / self.nodes
@@ -506,16 +537,26 @@ class Base:
                 "variable_timestep",
                 "dt_min",
                 "dt_max",
+                "route_margin_m",
             }
         }
 
         # Build dynamics function (captures self.dt with free ts_final)
-        self.init_model(objective, **model_kwargs)
+        safe_prefix = "".join(
+            character if character.isalnum() or character == "_" else "_"
+            for character in name_prefix
+        )
+        self.init_model(
+            objective,
+            function_name=f"dynamics_{safe_prefix}",
+            **model_kwargs,
+        )
 
         C, D, B = self.collocation_coeff()
         nstates = self.x.shape[0]
 
         X = []  # States at node boundaries (length: nodes + 1)
+        Xc_store = []  # Collocation states per interval
         U = []  # Controls at each node (length: nodes)
         J = 0  # Objective accumulator
 
@@ -560,6 +601,7 @@ class Base:
                 Xc.append(Xkj)
                 self._opti.subject_to(self._opti.bounded(self.x_lb, Xkj, self.x_ub))  # type: ignore[arg-type]  # CasADi stubs wrong
                 self._opti.set_initial(Xkj, self.x_guess[k])
+            Xc_store.append(Xc)
 
             # Collocation equations and quadrature
             Xk_end = D[0] * Xk
@@ -605,7 +647,9 @@ class Base:
         self._objective_rescale = 1.0
         if kwargs.get("auto_rescale_objective", False):
             x_init = self._opti.debug.value(self._opti.x, self._opti.initial())
-            j_at_init = ca.Function("j_at_init", [self._opti.x], [J])
+            j_at_init = ca.Function(
+                f"objective_at_initial_{safe_prefix}", [self._opti.x], [J]
+            )
             f0 = float(j_at_init(x_init))  # type: ignore[arg-type]  # CasADi Function.__call__ return type is opaque to pyright
             # Only skip rescaling if f0 is essentially zero to avoid
             # divide-by-zero. Otherwise rescale by abs(f0) in either
@@ -613,11 +657,30 @@ class Base:
             # the natural magnitude is far below 1.
             if abs(f0) > 1e-30:
                 self._objective_rescale = abs(f0)
-                J = J / self._objective_rescale
+        objective_raw = J
+        objective_scaled = J / self._objective_rescale
 
-        self._opti.minimize(J)
+        if minimize:
+            self._opti.minimize(objective_scaled)
 
-        return X, U
+        return AircraftTranscription(
+            optimizer=self,
+            opti=opti,
+            X=X,
+            Xc=Xc_store,
+            U=U,
+            ts_final=self.ts_final,
+            interval_dts=(
+                list(self._interval_dts)
+                if variable_timestep
+                else [self.dt for _ in range(self.nodes)]
+            ),
+            objective_raw=objective_raw,
+            objective_scaled=objective_scaled,
+            objective_scale=self._objective_rescale,
+            objective_kwargs=dict(kwargs),
+            projection_center=getattr(self, "_projection_center", None),
+        )
 
     def _interval_dt(self, k: int) -> Any:
         if getattr(self, "_variable_timestep", False):

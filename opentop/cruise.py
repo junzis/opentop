@@ -4,11 +4,13 @@ import warnings
 from math import pi
 from typing import TYPE_CHECKING, Any, Callable
 
+import casadi as ca
 import openap.casadi as oc
 from openap.aero import fpm, ft, kts
 
 import pandas as pd
 
+from ._transcription import AircraftTranscription
 from ._types import LatLon
 from .base import Base
 
@@ -78,7 +80,8 @@ class Cruise(Base):
         xp_0, yp_0 = self.proj(self.lon1, self.lat1)
         xp_f, yp_f = self.proj(self.lon2, self.lat2)
         x_min, x_max, y_min, y_max = self._compute_bbox(
-            waypoints=kwargs.get("waypoints")
+            margin_m=kwargs.get("route_margin_m", 10_000),
+            waypoints=kwargs.get("waypoints"),
         )
 
         ts_min = 0
@@ -131,6 +134,136 @@ class Cruise(Base):
         # Initial guess - controls
         self.u_guess = [0.7, 0, psi]
 
+    def _add_formulation(
+        self,
+        opti: ca.Opti,
+        objective: str | Callable = "fuel",
+        *,
+        max_fuel: float | None = None,
+        initial_guess: pd.DataFrame | None = None,
+        h_min: float | None = None,
+        h_max: float | None = None,
+        interpolant: Any = None,
+        n_dim: int | None = None,
+        time_dependent: bool = False,
+        auto_rescale_objective: bool = False,
+        exact_hessian: bool = False,
+        waypoints: list[LatLon] | None = None,
+        waypoint_tolerance_m: float = 2_000.0,
+        waypoint_node_indices: list[int] | None = None,
+        variable_timestep: bool | None = None,
+        dt_min: float | None = None,
+        dt_max: float | None = None,
+        route_margin_m: float = 10_000.0,
+        name_prefix: str = "flight",
+        minimize: bool = False,
+    ) -> AircraftTranscription:
+        """Add this cruise phase to an existing CasADi Opti stack."""
+        kwargs = {
+            "initial_guess": initial_guess,
+            "interpolant": interpolant,
+            "n_dim": n_dim,
+            "time_dependent": time_dependent,
+            "auto_rescale_objective": auto_rescale_objective,
+            "exact_hessian": exact_hessian,
+            "waypoints": waypoints,
+            "waypoint_tolerance_m": waypoint_tolerance_m,
+            "waypoint_node_indices": waypoint_node_indices,
+            "variable_timestep": waypoints is not None
+            if variable_timestep is None
+            else variable_timestep,
+            "dt_min": dt_min,
+            "dt_max": dt_max,
+            "route_margin_m": route_margin_m,
+        }
+        if dt_max is None:
+            kwargs.pop("dt_max")
+        init_kwargs = dict(kwargs)
+        if h_min is not None:
+            init_kwargs["h_min"] = h_min
+        if h_max is not None:
+            init_kwargs["h_max"] = h_max
+        self.init_conditions(**init_kwargs)
+
+        transcription = self._add_transcription(
+            opti,
+            objective,
+            ts_final_guess=self.range / 200,
+            minimize=minimize,
+            name_prefix=name_prefix,
+            **kwargs,
+        )
+        X, U = transcription.X, transcription.U
+
+        # Aircraft performance constraints
+        for k in range(self.nodes):
+            mass = X[k][3]
+            v = oc.aero.mach2tas(U[k][0], X[k][2], dT=self.dT)
+            tas = v / kts
+            alt = X[k][2] / ft
+            thrust_max = self._thrust_climb(tas, alt)
+            self._constrain_clean_performance(opti, mass, tas, alt, thrust_max)
+
+        # Terminal state uses the final interval control U[-1].
+        v_f = oc.aero.mach2tas(U[-1][0], X[-1][2], dT=self.dT)
+        tas_f = v_f / kts
+        alt_f = X[-1][2] / ft
+        thrust_max_f = self._thrust_climb(tas_f, alt_f)
+        self._constrain_clean_performance(opti, X[-1][3], tas_f, alt_f, thrust_max_f)
+
+        # ts and dt consistency
+        for k in range(self.nodes - 1):
+            opti.subject_to(
+                opti.bounded(-1, X[k + 1][4] - X[k][4] - self._interval_dt(k), 1)  # type: ignore[arg-type]
+            )
+
+        # Limit turn rate independently of interval duration
+        for k in range(self.nodes - 1):
+            turn_rate = self._control_change_rate(U, k, 2)
+            opti.subject_to(
+                opti.bounded(-self.MAX_TURN_RATE, turn_rate, self.MAX_TURN_RATE)  # type: ignore[arg-type]
+            )
+
+        # Limit vertical acceleration independently of interval duration
+        for k in range(self.nodes - 1):
+            vertical_acceleration = self._control_change_rate(U, k, 1)
+            opti.subject_to(
+                opti.bounded(
+                    -self.MAX_VERTICAL_ACCELERATION,
+                    vertical_acceleration,
+                    self.MAX_VERTICAL_ACCELERATION,
+                )  # type: ignore[arg-type]
+            )
+
+        if self.fix_mach:
+            for k in range(self.nodes - 1):
+                opti.subject_to(U[k + 1][0] == U[k][0])
+
+        if self.fix_alt:
+            for k in range(self.nodes):
+                opti.subject_to(U[k][1] == 0)
+
+        if self.fix_track:
+            for k in range(self.nodes - 1):
+                opti.subject_to(U[k + 1][2] == U[k][2])
+
+        if not self.allow_descent:
+            for k in range(self.nodes):
+                opti.subject_to(U[k][1] >= 0)
+
+        self._constrain_waypoints(
+            X,
+            waypoints,
+            waypoint_tolerance_m=waypoint_tolerance_m,
+            waypoint_node_indices=waypoint_node_indices,
+        )
+
+        opti.subject_to(opti.bounded(0, X[0][3] - X[-1][3], self.fuel_max))  # type: ignore[arg-type]
+        if max_fuel is not None:
+            opti.subject_to(X[0][3] - X[-1][3] <= max_fuel)
+
+        return transcription
+
     def trajectory(
         self,
         objective: str | Callable = "fuel",
@@ -151,6 +284,7 @@ class Cruise(Base):
         variable_timestep: bool | None = None,
         dt_min: float | None = None,
         dt_max: float | None = None,
+        route_margin_m: float = 10_000.0,
         result_object: bool = False,
     ) -> pd.DataFrame | TrajectoryResult:
         """Compute the optimal cruise trajectory.
@@ -179,13 +313,15 @@ class Cruise(Base):
             dt_min: Minimum interval duration in seconds for variable timesteps.
                 Defaults to an automatic fraction of the expected interval duration.
             dt_max: Maximum interval duration in seconds for variable timesteps.
+            route_margin_m: Lateral projected-coordinate bound around the route.
+                Defaults to 10,000 meters.
             result_object: If True, return a TrajectoryResult instead of a
                 DataFrame. Default False.
 
         Returns:
             pd.DataFrame (or TrajectoryResult if result_object=True).
         """
-        _kwargs = {
+        solve_kwargs = {
             "initial_guess": initial_guess,
             "interpolant": interpolant,
             "n_dim": n_dim,
@@ -200,96 +336,35 @@ class Cruise(Base):
             else variable_timestep,
             "dt_min": dt_min,
             "dt_max": dt_max,
+            "route_margin_m": route_margin_m,
         }
         if dt_max is None:
-            _kwargs.pop("dt_max")
-        init_kwargs = dict(_kwargs)
-        if h_min is not None:
-            init_kwargs["h_min"] = h_min
-        if h_max is not None:
-            init_kwargs["h_max"] = h_max
-        self.init_conditions(**init_kwargs)
-
-        customized_max_fuel = max_fuel
-
-        X, U = self._build_opti(objective, ts_final_guess=self.range / 200, **_kwargs)
-        opti = self._opti
-
-        # --- Phase-specific constraints ---
-
-        # Aircraft performance constraints
-        for k in range(self.nodes):
-            mass = X[k][3]
-            v = oc.aero.mach2tas(U[k][0], X[k][2], dT=self.dT)
-            tas = v / kts
-            alt = X[k][2] / ft
-            thrust_max = self._thrust_climb(tas, alt)
-            self._constrain_clean_performance(opti, mass, tas, alt, thrust_max)
-
-        # Terminal state uses the final interval control U[-1].
-        v_f = oc.aero.mach2tas(U[-1][0], X[-1][2], dT=self.dT)
-        tas_f = v_f / kts
-        alt_f = X[-1][2] / ft
-        thrust_max_f = self._thrust_climb(tas_f, alt_f)
-        self._constrain_clean_performance(opti, X[-1][3], tas_f, alt_f, thrust_max_f)
-
-        # ts and dt consistency
-        for k in range(self.nodes - 1):
-            opti.subject_to(
-                opti.bounded(-1, X[k + 1][4] - X[k][4] - self._interval_dt(k), 1)  # type: ignore[arg-type]
-                # CasADi stubs wrong: bounded(float, expr, float) is valid
-            )
-
-        # Limit turn rate independently of interval duration
-        for k in range(self.nodes - 1):
-            turn_rate = self._control_change_rate(U, k, 2)
-            opti.subject_to(
-                opti.bounded(-self.MAX_TURN_RATE, turn_rate, self.MAX_TURN_RATE)  # type: ignore[arg-type]  # CasADi stubs wrong
-            )
-
-        # Limit vertical acceleration independently of interval duration
-        for k in range(self.nodes - 1):
-            vertical_acceleration = self._control_change_rate(U, k, 1)
-            opti.subject_to(
-                opti.bounded(
-                    -self.MAX_VERTICAL_ACCELERATION,
-                    vertical_acceleration,
-                    self.MAX_VERTICAL_ACCELERATION,
-                )  # type: ignore[arg-type]  # CasADi stubs wrong
-            )
-
-        # Optional constraints
-        if self.fix_mach:
-            for k in range(self.nodes - 1):
-                opti.subject_to(U[k + 1][0] == U[k][0])
-
-        if self.fix_alt:
-            for k in range(self.nodes):
-                opti.subject_to(U[k][1] == 0)
-
-        if self.fix_track:
-            for k in range(self.nodes - 1):
-                opti.subject_to(U[k + 1][2] == U[k][2])
-
-        if not self.allow_descent:
-            for k in range(self.nodes):
-                opti.subject_to(U[k][1] >= 0)
-
-        self._constrain_waypoints(
-            X,
-            waypoints,
+            solve_kwargs.pop("dt_max")
+        opti = ca.Opti()
+        transcription = self._add_formulation(
+            opti,
+            objective,
+            max_fuel=max_fuel,
+            initial_guess=initial_guess,
+            h_min=h_min,
+            h_max=h_max,
+            interpolant=interpolant,
+            n_dim=n_dim,
+            time_dependent=time_dependent,
+            auto_rescale_objective=auto_rescale_objective,
+            exact_hessian=exact_hessian,
+            waypoints=waypoints,
             waypoint_tolerance_m=waypoint_tolerance_m,
             waypoint_node_indices=waypoint_node_indices,
+            variable_timestep=variable_timestep,
+            dt_min=dt_min,
+            dt_max=dt_max,
+            route_margin_m=route_margin_m,
+            minimize=True,
         )
 
-        # Fuel constraint
-        opti.subject_to(opti.bounded(0, X[0][3] - X[-1][3], self.fuel_max))  # type: ignore[arg-type]  # CasADi stubs wrong
-
-        if customized_max_fuel is not None:
-            opti.subject_to(X[0][3] - X[-1][3] <= customized_max_fuel)
-
         # --- Solve ---
-        df = self._solve(X, U, **_kwargs)
+        df = self._solve(transcription.X, transcription.U, **solve_kwargs)
         df_copy = df.copy()
 
         if not self._last_solution.stats()["success"]:

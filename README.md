@@ -93,6 +93,48 @@ opt.fix_track_angle()
 flight = opt.trajectory()
 ```
 
+### Multiple-aircraft separation optimization
+
+`MultiAircraft` formulates several cruise trajectories in one CasADi Opti
+problem and applies the default 5 NM / 1,000 ft high-order separation model:
+
+```python
+import opentop
+
+flights = [
+    opentop.FlightSpec(
+        "AC1", opentop.Cruise("A320", (52.3, 9.8), (49.5, 2.5)), start_time=0
+    ),
+    opentop.FlightSpec(
+        "AC2", opentop.Cruise("B738", (52.9, 4.6), (49.5, 9.3)), start_time=140
+    ),
+]
+
+result = opentop.MultiAircraft(flights).trajectory()
+df_ac1 = result.trajectories["AC1"]
+```
+
+The default constraint is
+`(dx / Rxy)^2 + (dy / Rxy)^2 + (dh / Rz)^8 >= 1.3`. Pass a
+`SeparationConfig` only to customize it. Fleet DataFrames preserve relative
+`ts` and add `absolute_ts` using each flight's configured start time.
+
+To study horizontal conflict avoidance at one shared flight level, first call
+`fix_cruise_altitude()` on every child optimizer and then pass
+`common_altitude=True`. The common altitude remains an optimization variable:
+
+```python
+for flight in flights:
+    flight.optimizer.fix_cruise_altitude()
+
+result = opentop.MultiAircraft(flights, common_altitude=True).trajectory()
+```
+
+The initial implementation supports uniform-timestep `Cruise` fuel
+optimization. Wind, waypoints/variable timesteps, time-dependent 4D grid
+objectives, and other phases are rejected explicitly until their fleet timing
+semantics are implemented.
+
 ### Wind integration
 
 Download ERA5 (or similar) meteorological data in GRIB format, then:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Literal
 
 import openap
@@ -52,6 +54,24 @@ def build_performance_models(
         engtype = engine or aircraft["engine"]["default"]
         engine_data = oc.prop.engine(engtype)
         force_engine = engine is not None
+        # OpenAP emits this warning once for Drag and again for FuelFlow on
+        # every optimizer construction. Wave drag remains intentionally
+        # enabled; only its repetitive experimental-status warning is hidden.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Warning: Wave drag is experimental\.",
+                category=UserWarning,
+                module=r"openap\.drag",
+            )
+            drag = oc.Drag(actype, wave_drag=True, use_synonym=use_synonym)
+            fuelflow = oc.FuelFlow(
+                actype,
+                engtype,
+                wave_drag=True,
+                use_synonym=use_synonym,
+                force_engine=force_engine,
+            )
         return PerformanceModels(
             name=name,
             aircraft=aircraft,
@@ -63,14 +83,8 @@ def build_performance_models(
                 use_synonym=use_synonym,
                 force_engine=force_engine,
             ),
-            drag=oc.Drag(actype, wave_drag=True, use_synonym=use_synonym),
-            fuelflow=oc.FuelFlow(
-                actype,
-                engtype,
-                wave_drag=True,
-                use_synonym=use_synonym,
-                force_engine=force_engine,
-            ),
+            drag=drag,
+            fuelflow=fuelflow,
             emission=oc.Emission(actype, engtype, use_synonym=use_synonym),
         )
 
@@ -140,6 +154,7 @@ def build_performance_models(
     )
 
 
+@lru_cache(maxsize=None)
 def build_numeric_fuelflow(
     actype: str,
     *,
