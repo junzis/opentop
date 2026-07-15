@@ -1,3 +1,6 @@
+from collections.abc import MutableMapping
+from typing import Any, cast
+
 import openap
 import pytest
 
@@ -6,7 +9,12 @@ import opentop as top
 import pandas as pd
 
 
-def _small_cruise(origin="EHAM", destination="EDDF", *, nodes=8):
+def _small_cruise(
+    origin: str | tuple[float, float] = "EHAM",
+    destination: str | tuple[float, float] = "EDDF",
+    *,
+    nodes: int = 8,
+) -> top.Cruise:
     optimizer = top.Cruise("A320", origin, destination, 0.85)
     optimizer.setup(nodes=nodes, max_iter=800)
     return optimizer
@@ -32,7 +40,9 @@ def test_flight_spec_keeps_joint_options_separate_and_immutable():
     assert "inbound_route_side" not in spec.options
     assert spec.joint_options["inbound_route_side"] == "right"
     with pytest.raises(TypeError):
-        spec.joint_options["inbound_route_side"] = "left"
+        cast(MutableMapping[str, Any], spec.joint_options)["inbound_route_side"] = (
+            "left"
+        )
 
 
 def test_multi_aircraft_uses_default_separation_config():
@@ -119,9 +129,12 @@ def test_crossing_aircraft_can_avoid_conflict_at_one_common_altitude():
 
 def test_two_descent_arrivals_are_sequenced_and_separated():
     runway = (52.360258, 4.711725)
-    approach_waypoints = tuple(
-        tuple(map(float, openap.aero.latlon(*runway, distance_m, 0.0)))
-        for distance_m in (40_000.0, 20_000.0)
+    approach_waypoints: tuple[tuple[float, float], ...] = tuple(
+        (float(point[0]), float(point[1]))
+        for point in (
+            openap.aero.latlon(*runway, distance_m, 0.0)
+            for distance_m in (40_000.0, 20_000.0)
+        )
     )
     flights = []
     for index, (distance_km, bearing, start_time) in enumerate(
@@ -182,7 +195,8 @@ def test_two_descent_arrivals_are_sequenced_and_separated():
                 openap.aero.distance(
                     trajectory.latitude.iloc[node_index],
                     trajectory.longitude.iloc[node_index],
-                    *waypoint,
+                    waypoint[0],
+                    waypoint[1],
                 )
                 <= 500.0 + 1e-3
             )
@@ -195,6 +209,7 @@ def test_two_descent_arrivals_are_sequenced_and_separated():
 def test_single_aircraft_shared_opti_matches_direct_cruise():
     direct = _small_cruise()
     direct_df = direct.trajectory(objective="fuel")
+    assert isinstance(direct_df, pd.DataFrame)
     direct_objective = direct.objective_value
 
     child = _small_cruise()

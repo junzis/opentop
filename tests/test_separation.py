@@ -52,8 +52,10 @@ def test_high_order_metric_supports_symbolic_inputs():
     dz = ca.MX.sym("dz")  # type: ignore[arg-type]
     expression = separation_metric(0.0, 0.0, dz, SeparationConfig())
     function = ca.Function("metric", [dz], [expression])
+    metric = function(1000 * 0.3048)
 
-    assert float(function(1000 * 0.3048)) == pytest.approx(1.0)
+    assert isinstance(metric, ca.DM)
+    assert float(metric) == pytest.approx(1.0)
 
 
 def test_collocation_interpolation_recovers_all_roots():
