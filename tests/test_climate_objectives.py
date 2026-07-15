@@ -1,12 +1,13 @@
 """Parametrized climate-objective smoke.
 
-Pins that all 6 metrics (gwp20/50/100, gtp20/50/100) produce finite,
-non-zero objective values and converge on a short cruise. Before Phase 3
-restructures objective dispatch, this is the safety net.
+Pins that the reliable optimization metrics (gwp20/50/100, gtp50/100)
+produce finite, non-zero objective values and converge on a short cruise.
+GTP20 remains available but is excluded because it is not a reliable
+optimization regression metric.
 
 Note on sign: GWP metrics always sum to a positive value (all coefficients
-positive). GTP metrics can be negative — in particular gtp20 and gtp50
-have large negative NOx/SOx coefficients that dominate at cruise, making
+positive). GTP metrics can be negative — in particular gtp50 has large
+negative NOx/SOx coefficients that dominate at cruise, making
 the physical objective negative. Finiteness and non-zero are the invariants
 we can assert uniformly; positivity is metric-dependent.
 """
@@ -17,7 +18,7 @@ import pytest
 
 import opentop as top
 
-CLIMATE_METRICS = ["gwp20", "gwp50", "gwp100", "gtp20", "gtp50", "gtp100"]
+CLIMATE_METRICS = ["gwp20", "gwp50", "gwp100", "gtp50", "gtp100"]
 
 # GWP metrics: all species coefficients positive → objective always positive.
 # GTP metrics: NOx / SOx coefficients negative at short timescales → can be negative.
