@@ -1,0 +1,21 @@
+{
+  "airac_cycle": "2406",
+  "case": "EHAM-LIRF at FL350",
+  "source_files": {
+    "NavPoint_2406.nnpt": "b10e303601c88792f2e82ce67102b4d8b96014c1585548e6810d11edcec663e0",
+    "VST_2406.ase": "0c8ca29c0b38958f76e7dc4d22dc8a246042ae0756d81c22e1ed2d9be61faef1",
+    "VST_2406_Airports.arp": "22e016ef9ccd9dd0c92cfb95178a555fb8b7ec7febdf308eb0d3ef81d2a40aa9"
+  },
+  "selection": {
+    "orientation": "odd",
+    "source_candidate_count": 5,
+    "maximum_shared_edge_fraction": 0.7,
+    "connector_count": 12,
+    "maximum_connector_distance_m": 300000.0
+  },
+  "records": {
+    "navpoints": 100,
+    "segments": 106,
+    "airports": 2
+  }
+}

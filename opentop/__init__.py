@@ -1,6 +1,6 @@
 from importlib.metadata import version
 
-from . import tools, vis
+from . import rad, tools, vis
 from .base import Base
 from .climb import Climb
 from .cruise import Cruise
@@ -13,6 +13,16 @@ from .fleet import (
     SeparationConfig,
 )
 from .full import CompleteFlight
+from .routes import (
+    OptimizedRouteOption,
+    RouteChoiceResult,
+    RouteNetwork,
+    RouteNetworkSelection,
+    RouteOptimizationConfig,
+    RouteOption,
+    optimize_routes,
+)
+from .routing import RouteSelectionConfig
 
 __all__ = [
     "Base",
@@ -23,8 +33,17 @@ __all__ = [
     "FlightSpec",
     "MultiAircraft",
     "MultiAircraftResult",
+    "OptimizedRouteOption",
     "PairSeparationReport",
+    "RouteChoiceResult",
+    "RouteNetwork",
+    "RouteNetworkSelection",
+    "RouteOptimizationConfig",
+    "RouteOption",
+    "RouteSelectionConfig",
     "SeparationConfig",
+    "optimize_routes",
+    "rad",
     "tools",
     "vis",
 ]

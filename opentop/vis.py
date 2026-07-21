@@ -9,6 +9,8 @@ from openap import aero
 import numpy as np
 import pandas as pd
 
+from . import plotting
+
 
 def plot_map(df, windfield=None, ax=None, barb_steps=10, color=None, label=None):
     """Plot trajectory on a map with optional wind barbs.
@@ -40,11 +42,18 @@ def plot_map(df, windfield=None, ax=None, barb_steps=10, color=None, label=None)
             )
 
         ax.set_extent([lonmin - 4, lonmax + 4, latmin - 2, latmax + 2])  # type: ignore[attr-defined]  # cartopy GeoAxes methods not in matplotlib stubs
-        ax.add_feature(OCEAN, facecolor="#d1e0e0", zorder=-1, lw=0)  # type: ignore[attr-defined]
-        ax.add_feature(LAND, facecolor="#f5f5f5", lw=0)  # type: ignore[attr-defined]
-        ax.add_feature(BORDERS, lw=0.5, color="gray")  # type: ignore[attr-defined]
-        ax.gridlines(draw_labels=True, color="gray", alpha=0.5, ls="--")  # type: ignore[attr-defined]
-        ax.coastlines(resolution="50m", lw=0.5, color="gray")  # type: ignore[attr-defined]
+        ax.add_feature(OCEAN, facecolor=plotting.OCEAN_COLOR, zorder=-1, lw=0)  # type: ignore[attr-defined]
+        ax.add_feature(LAND, facecolor=plotting.LAND_COLOR, lw=0)  # type: ignore[attr-defined]
+        ax.add_feature(BORDERS, lw=0.5, color=plotting.GRID_COLOR)  # type: ignore[attr-defined]
+        ax.gridlines(  # type: ignore[attr-defined]
+            draw_labels=True,
+            color=plotting.GRID_COLOR,
+            alpha=0.45,
+            ls=":",
+        )
+        ax.coastlines(  # type: ignore[attr-defined]
+            resolution="50m", lw=0.5, color=plotting.COAST_COLOR
+        )
 
         if windfield is not None:
             # get the closed altitude
@@ -72,14 +81,14 @@ def plot_map(df, windfield=None, ax=None, barb_steps=10, color=None, label=None)
             )
 
         # great circle
-        ax.scatter(lon1, lat1, c="darkgreen", transform=ccrs.Geodetic())
-        ax.scatter(lon2, lat2, c="tab:red", transform=ccrs.Geodetic())
+        ax.scatter(lon1, lat1, c=plotting.OKABE_ITO[2], transform=ccrs.Geodetic())
+        ax.scatter(lon2, lat2, c=plotting.OKABE_ITO[1], transform=ccrs.Geodetic())
 
         ax.plot(
             [lon1, lon2],
             [lat1, lat2],
             label="Great Circle",
-            color="tab:red",
+            color=plotting.OKABE_ITO[1],
             ls="--",
             transform=ccrs.Geodetic(),
         )
@@ -88,14 +97,15 @@ def plot_map(df, windfield=None, ax=None, barb_steps=10, color=None, label=None)
         ax.plot(
             df.longitude,
             df.latitude,
-            color=color if color is not None else "tab:green",
+            color=color if color is not None else plotting.OKABE_ITO[0],
             transform=ccrs.Geodetic(),
             linewidth=2,
             marker=".",
             label=label if label is not None else "Optimal",
         )
 
-        ax.legend()
+        legend = ax.legend()
+        legend.get_frame().set_alpha(0.82)
 
         return plt
 
@@ -150,13 +160,14 @@ def trajectory(
         ax2.plot(d.ts, d.tas, lw=2, marker=".", color=color, label=label)
         ax3.plot(d.ts, d.vertical_rate, lw=2, marker=".", color=color, label=label)
 
-    ax1.set_ylabel("altitude (ft)")
+    ax1.set_ylabel("Altitude (ft)")
     ax1.set_ylim(0, 45_000)
     ax1.grid(ls=":")
-    ax2.set_ylabel("TAS")
+    ax2.set_ylabel("True airspeed (kt)")
     ax2.set_ylim(0, 600)
     ax2.grid(ls=":")
-    ax3.set_ylabel("VS (ft/min)")
+    ax3.set_ylabel("Vertical rate (ft/min)")
+    ax3.set_xlabel("Elapsed time (s)")
     ax3.set_ylim(-3000, 3000)
     ax3.grid(ls=":")
 
@@ -188,5 +199,8 @@ def trajectory(
     if is_list:
         ax5.legend(loc="best", fontsize=8)
 
+    for axis in (ax1, ax2, ax3):
+        plotting.style_axes(axis)
+    plotting.add_panel_labels((ax1, ax2, ax3, ax5), x=-0.10, y=1.04)
     plt.tight_layout()
     return plt

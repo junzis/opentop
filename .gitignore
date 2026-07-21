@@ -2,7 +2,8 @@ tmp
 debug/
 /test*.py
 docs/superpowers/
-docs/design/
+docs/design/*
+!docs/design/rad_route_optimization.md
 tests/benchmarks/
 debug/scaling/investigation/
 
