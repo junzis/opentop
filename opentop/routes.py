@@ -7,12 +7,12 @@ name and an ordered polyline from origin to destination.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
 from time import perf_counter
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 from openap.aero import ft
 
@@ -35,6 +35,9 @@ from .routing import (
 )
 
 Waypoint = tuple[float, float]
+RouteObjective = str | Callable[..., Any]
+RouteObjectiveFactory = Callable[[Any], RouteObjective]
+RouteRankingMetric = Literal["fuel", "objective"]
 
 _GEOD = Geod(ellps="WGS84")
 
@@ -97,6 +100,8 @@ class OptimizedRouteOption:
     success: bool
     fuel_kg: float
     status: str
+    objective_value: float = float("nan")
+    grid_cost: float = float("nan")
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +110,7 @@ class RouteChoiceResult:
 
     optimized: tuple[OptimizedRouteOption, ...]
     solve_seconds: tuple[float, ...]
+    ranking_metric: RouteRankingMetric = "fuel"
 
     @property
     def successful(self) -> tuple[OptimizedRouteOption, ...]:
@@ -114,9 +120,17 @@ class RouteChoiceResult:
 
     @property
     def best(self) -> OptimizedRouteOption | None:
-        """Return the lowest-fuel successful option, if one exists."""
+        """Return the best successful option for the configured ranking metric."""
 
-        return min(self.successful, key=lambda result: result.fuel_kg, default=None)
+        def rank_value(result: OptimizedRouteOption) -> float:
+            value = (
+                result.fuel_kg
+                if self.ranking_metric == "fuel"
+                else result.objective_value
+            )
+            return value if math.isfinite(value) else float("inf")
+
+        return min(self.successful, key=rank_value, default=None)
 
     @property
     def optimal_route(self) -> RouteOption | None:
@@ -135,7 +149,9 @@ class RouteChoiceResult:
 class RouteOptimizationConfig:
     """Continuous optimization settings shared by every route source."""
 
-    objective: str = "fuel"
+    objective: RouteObjective = "fuel"
+    objective_factory: RouteObjectiveFactory | None = None
+    ranking_metric: RouteRankingMetric = "fuel"
     waypoint_tolerance_m: float = 2_000.0
     minimum_nodes: int = 20
     nodes_per_leg: int = 2
@@ -143,8 +159,10 @@ class RouteOptimizationConfig:
     trajectory_kwargs: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.objective:
+        if isinstance(self.objective, str) and not self.objective:
             raise ValueError("objective must not be empty")
+        if self.ranking_metric not in ("fuel", "objective"):
+            raise ValueError("ranking_metric must be 'fuel' or 'objective'")
         if self.waypoint_tolerance_m <= 0:
             raise ValueError("waypoint tolerance must be positive")
         if self.minimum_nodes < 1 or self.nodes_per_leg < 1:
@@ -459,7 +477,9 @@ def _optimize_route_options(
     routes: Sequence[RouteOption],
     optimizer_factory: Any,
     *,
-    objective: str = "fuel",
+    objective: RouteObjective = "fuel",
+    objective_factory: RouteObjectiveFactory | None = None,
+    ranking_metric: RouteRankingMetric = "fuel",
     waypoint_tolerance_m: float = 2_000.0,
     minimum_nodes: int = 20,
     nodes_per_leg: int = 2,
@@ -482,6 +502,9 @@ def _optimize_route_options(
         started = perf_counter()
         try:
             optimizer = optimizer_factory()
+            route_objective = (
+                objective if objective_factory is None else objective_factory(optimizer)
+            )
             waypoints = (
                 list(route.interior_waypoints)
                 if waypoint_simplification_tolerance_m is None
@@ -507,7 +530,7 @@ def _optimize_route_options(
                 complete_flight=isinstance(optimizer, CompleteFlight),
             )
             trajectory = optimizer.trajectory(
-                objective=objective,
+                objective=route_objective,
                 initial_guess=guess,
                 waypoints=waypoints,
                 waypoint_tolerance_m=waypoint_tolerance_m,
@@ -529,6 +552,8 @@ def _optimize_route_options(
                     trajectory.status
                     if conforms
                     else f"{trajectory.status}; route validation failed",
+                    float(getattr(trajectory, "objective", trajectory.fuel)),
+                    float(getattr(trajectory, "grid_cost", float("nan"))),
                 )
             )
         except Exception as error:
@@ -539,11 +564,17 @@ def _optimize_route_options(
                     False,
                     float("nan"),
                     f"{type(error).__name__}: {error}",
+                    float("nan"),
+                    float("nan"),
                 )
             )
         solve_seconds.append(perf_counter() - started)
 
-    return RouteChoiceResult(tuple(results), tuple(solve_seconds))
+    return RouteChoiceResult(
+        tuple(results),
+        tuple(solve_seconds),
+        ranking_metric,
+    )
 
 
 def optimize_routes(
@@ -558,6 +589,8 @@ def optimize_routes(
         routes,
         optimizer_factory,
         objective=config.objective,
+        objective_factory=config.objective_factory,
+        ranking_metric=config.ranking_metric,
         waypoint_tolerance_m=config.waypoint_tolerance_m,
         minimum_nodes=config.minimum_nodes,
         nodes_per_leg=config.nodes_per_leg,

@@ -98,6 +98,68 @@ def test_optimize_routes_selects_lowest_fuel_with_fresh_optimizers():
     assert len(result.solve_seconds) == 2
 
 
+def test_optimize_routes_can_rank_an_optimizer_specific_objective():
+    routes = (
+        top.RouteOption("lower fuel", ((50.0, 2.0), (51.0, 4.0))),
+        top.RouteOption("lower climate cost", ((50.0, 2.0), (51.0, 4.0))),
+    )
+    metrics = iter(((100.0, 4.0, 3.0), (120.0, 2.0, 1.0)))
+    objective_owners = []
+
+    class Result:
+        def __init__(
+            self,
+            df: pd.DataFrame,
+            fuel: float,
+            objective: float,
+            grid_cost: float,
+        ):
+            self.df = df
+            self.success = True
+            self.fuel = fuel
+            self.objective = objective
+            self.grid_cost = grid_cost
+            self.status = "ok"
+
+    class Optimizer:
+        def __init__(self, metrics: tuple[float, float, float]):
+            self.aircraft = {"cruise": {"height": 10_000.0}}
+            self.mass_init = 60_000.0
+            self.metrics = metrics
+
+        def setup(self, *, nodes: int) -> None:
+            self.nodes = nodes
+
+        def trajectory(self, **kwargs):
+            assert kwargs["objective"]() is self
+            return Result(kwargs["initial_guess"], *self.metrics)
+
+    def factory() -> Optimizer:
+        return Optimizer(next(metrics))
+
+    def objective_factory(optimizer):
+        objective_owners.append(optimizer)
+        return lambda: optimizer
+
+    result = top.optimize_routes(
+        routes,
+        factory,
+        config=top.RouteOptimizationConfig(
+            objective_factory=objective_factory,
+            ranking_metric="objective",
+            minimum_nodes=5,
+        ),
+    )
+
+    assert len(objective_owners) == 2
+    assert result.ranking_metric == "objective"
+    assert result.best is not None
+    assert result.best.route.name == "lower climate cost"
+    assert result.best.fuel_kg == 120.0
+    assert result.best.objective_value == 2.0
+    assert result.best.grid_cost == 1.0
+
+
 def test_route_network_selects_source_neutral_options():
     network = top.RouteNetwork.from_connections(
         {
