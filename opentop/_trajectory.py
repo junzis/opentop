@@ -36,6 +36,7 @@ def to_dataframe(
     use_synonym: bool = False,
     performance_model: str = "openap",
     bada_path: str | None = None,
+    fuel_model: Any = None,
     interpolant: Any = None,
     time_dependent: bool = True,
     n_dim: Optional[int] = None,
@@ -53,6 +54,7 @@ def to_dataframe(
         actype: Aircraft type string (for FuelFlow).
         engtype: Engine type string (for FuelFlow).
         use_synonym: Forwarded to ``openap.FuelFlow``.
+        fuel_model: Optional fuel-flow override, also used by the mass dynamics.
         interpolant: Optional CasADi grid-cost interpolant.
         time_dependent: Whether grid cost is time-dependent.
         n_dim: 3 or 4; auto-detected from interpolant if None.
@@ -133,12 +135,16 @@ def to_dataframe(
         )
     )
 
-    fuelflow = build_numeric_fuelflow(
-        actype,
-        engtype=engtype,
-        use_synonym=use_synonym,
-        performance_model=performance_model,
-        bada_path=bada_path,
+    fuelflow = (
+        fuel_model
+        if fuel_model is not None
+        else build_numeric_fuelflow(
+            actype,
+            engtype=engtype,
+            use_synonym=use_synonym,
+            performance_model=performance_model,
+            bada_path=bada_path,
+        )
     )
 
     df = df.assign(

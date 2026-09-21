@@ -48,13 +48,14 @@ def obj_fuel(
     performance_model: str = "openap",
     bada_path: str | None = None,
     symbolic: bool = True,
+    fuel_model: Any = None,
     **kwargs: Any,
 ) -> ca.MX:
     """Fuel burn objective: fuelflow * dt.
 
     Symbolic path uses the CasADi ``fuelflow`` passed in; non-symbolic path
-    builds a numpy ``openap.FuelFlow`` from actype/engtype so callers can
-    evaluate the objective on solved numeric trajectories.
+    reuses an explicit ``fuel_model`` or builds the selected numeric performance
+    model so callers can evaluate the objective on solved numeric trajectories.
     """
     _, _, h, m, _ = x[0], x[1], x[2], x[3], x[4]  # type: ignore[index]  # Symbolic includes float but x is always array-like
     mach, vs, _ = u[0], u[1], u[2]  # type: ignore[index]
@@ -63,12 +64,16 @@ def obj_fuel(
         ff_model = fuelflow
         v = oc.aero.mach2tas(mach, h, dT=dT)  # type: ignore[arg-type]  # openap stubs say int, float/symbolic works
     else:
-        ff_model = build_numeric_fuelflow(
-            actype,
-            engtype=engtype,
-            use_synonym=use_synonym,
-            performance_model=performance_model,
-            bada_path=bada_path,
+        ff_model = (
+            fuel_model
+            if fuel_model is not None
+            else build_numeric_fuelflow(
+                actype,
+                engtype=engtype,
+                use_synonym=use_synonym,
+                performance_model=performance_model,
+                bada_path=bada_path,
+            )
         )
         v = openap.aero.mach2tas(mach, h, dT=dT)  # type: ignore[arg-type]
 

@@ -37,6 +37,38 @@ def _native_actype(actype: str) -> str:
     return actype.split("-", 1)[0]
 
 
+class _Bada3EnrouteFuelFlow:
+    """Enforce BADA3's idle floor in the returned kg/s units.
+
+    OpenAP 2.6.0's nominal method compares an idle value in kg/s with a
+    nominal value in kg/min before dividing by 60. Apply the floor after
+    conversion so descent cannot exploit the resulting low fuel flow.
+    """
+
+    def __init__(self, model: Any) -> None:
+        self.model = model
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.model, name)
+
+    def enroute(
+        self,
+        mass: Any,
+        tas: Any,
+        alt: Any,
+        vs: Any = 0,
+        acc: Any = None,
+        dT: Any = 0,
+    ) -> Any:
+        nominal = self.model.enroute(mass, tas, alt, vs, acc=acc, dT=dT)
+        idle = self.model.idle(mass, tas, alt, vs)
+        if self.model.smooth:
+            # Keep the idle transition smooth in kg/s for the full-flight NLP.
+            # The maximum smoothing increment at equality is 0.0005 kg/s.
+            return self.model.backend.smooth_max(nominal, idle, softness=1e-3)
+        return self.model.backend.maximum(nominal, idle)
+
+
 def build_performance_models(
     actype: str,
     *,
@@ -116,11 +148,13 @@ def build_performance_models(
                 backend=backend,
                 smooth=symbolic,
             ),
-            fuelflow=bada3.FuelFlow(
-                actype,
-                bada_path=bada_path,
-                backend=backend,
-                smooth=symbolic,
+            fuelflow=_Bada3EnrouteFuelFlow(
+                bada3.FuelFlow(
+                    actype,
+                    bada_path=bada_path,
+                    backend=backend,
+                    smooth=symbolic,
+                )
             ),
             emission=emission,
         )
@@ -165,18 +199,28 @@ def build_numeric_fuelflow(
 ) -> Any:
     name = normalize_model_name(performance_model)
     if name == "openap":
-        return openap.FuelFlow(
-            actype,
-            engtype,
-            use_synonym=use_synonym,
-            force_engine=True,
-        )
+        # Numeric reporting/objectives must use the same wave-drag setting
+        # as build_performance_models, especially near the cruise Mach limit.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Warning: Wave drag is experimental\.",
+                category=UserWarning,
+                module=r"openap\.drag",
+            )
+            return openap.FuelFlow(
+                actype,
+                engtype,
+                use_synonym=use_synonym,
+                force_engine=True,
+                wave_drag=True,
+            )
     if bada_path is None:
         raise ValueError("bada_path is required when performance_model is BADA")
     if name == "bada3":
         from openap.addon import bada3
 
-        return bada3.FuelFlow(actype, bada_path=bada_path)
+        return _Bada3EnrouteFuelFlow(bada3.FuelFlow(actype, bada_path=bada_path))
 
     from openap.addon import bada4
 

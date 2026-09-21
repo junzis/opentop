@@ -18,12 +18,13 @@ except ImportError:
     warnings.warn("cfgrib and sklearn are required for wind integration")
 
 from . import _dynamics, _objectives, _trajectory
-from ._performance import build_performance_models
+from ._performance import build_numeric_fuelflow, build_performance_models
 from ._transcription import AircraftTranscription
 from ._types import LatLon
 
 if TYPE_CHECKING:
     from ._options import TrajectoryResult
+    from .neural import AcropoleFuelFlow, PhysicsCorrectedFuelFlow
 
 
 class Base:
@@ -67,6 +68,7 @@ class Base:
         performance_model: str = "openap",
         bada_path: str | None = None,
         payload: float | None = None,
+        fuel_model: AcropoleFuelFlow | PhysicsCorrectedFuelFlow | None = None,
     ) -> None:
         """OpenAP trajectory optimizer.
 
@@ -85,6 +87,8 @@ class Base:
             payload: Payload mass in kg. When provided, initial mass is optimized
                 between OEW + payload and the aircraft's fuel/MTOW limit; m0 is used
                 as the initial mass guess.
+            fuel_model: Optional neural fuel model for experimental still-air cruise.
+                Overrides fuel flow while retaining the selected force models.
         """
         if isinstance(origin, str):
             ap1 = openap.nav.airport(origin)
@@ -102,6 +106,12 @@ class Base:
         self.performance_model = performance_model.lower()
         self.bada_path = bada_path
         self.use_synonym = use_synonym
+        self.fuel_model = fuel_model
+        if (
+            fuel_model is not None
+            and fuel_model.actype != actype.upper().split("-", 1)[0]
+        ):
+            raise ValueError("fuel_model aircraft type must match the optimizer.")
         models = build_performance_models(
             self.actype,
             engine=engine,
@@ -136,7 +146,7 @@ class Base:
         self.thrust = models.thrust
         self.wrap = openap.WRAP(native_actype, use_synonym=self.use_synonym)
         self.drag = models.drag
-        self.fuelflow = models.fuelflow
+        self.fuelflow = models.fuelflow if fuel_model is None else fuel_model
         self.emission = models.emission
 
         self.wind = None
@@ -303,6 +313,8 @@ class Base:
         Args:
             windfield: DataFrame with columns [longitude, latitude, h, ts, u, v].
         """
+        if self.fuel_model is not None:
+            raise ValueError("Neural fuel optimization currently requires still air.")
         self.wind = tools.PolyWind(
             windfield, self.proj, self.lat1, self.lon1, self.lat2, self.lon2
         )
@@ -410,6 +422,8 @@ class Base:
             objective: Objective name (str), "ci:N" format, or callable(x, u, dt).
             **kwargs: Passed to the objective function.
         """
+        if self.fuel_model is not None and self.wind is not None:
+            raise ValueError("Neural fuel optimization currently requires still air.")
         # Model variables — CasADi stubs incorrectly type MX.sym(str) as MX.sym(MX)
         xp = ca.MX.sym("xp")  # type: ignore[arg-type]
         yp = ca.MX.sym("yp")  # type: ignore[arg-type]
@@ -904,11 +918,19 @@ class Base:
             emission = self.emission
             v = oc.aero.mach2tas(mach, h, dT=self.dT)
         else:
-            fuelflow = openap.FuelFlow(
-                self.actype, self.engtype, polydeg=2, use_synonym=self.use_synonym
-            )
+            fuelflow = self.fuel_model
+            if fuelflow is None:
+                fuelflow = build_numeric_fuelflow(
+                    self.actype,
+                    engtype=self.engtype,
+                    use_synonym=self.use_synonym,
+                    performance_model=self.performance_model,
+                    bada_path=self.bada_path,
+                )
             emission = openap.Emission(
-                self.actype, self.engtype, use_synonym=self.use_synonym
+                self.actype.split("-", 1)[0],
+                self.engtype,
+                use_synonym=self.use_synonym,
             )
             v = openap.aero.mach2tas(mach, h, dT=self.dT)  # type: ignore[arg-type]  # openap stubs type dT as int; float is correct
 
@@ -935,6 +957,7 @@ class Base:
             "use_synonym": self.use_synonym,
             "performance_model": self.performance_model,
             "bada_path": self.bada_path,
+            "fuel_model": self.fuel_model,
             "proj": self.proj,
             "calc_emission": self._calc_emission,
         }
@@ -1035,6 +1058,7 @@ class Base:
             use_synonym=self.use_synonym,
             performance_model=self.performance_model,
             bada_path=self.bada_path,
+            fuel_model=self.fuel_model,
             interpolant=kwargs.get("interpolant", None),
             time_dependent=kwargs.get("time_dependent", True),
             n_dim=kwargs.get("n_dim"),

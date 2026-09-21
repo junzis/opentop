@@ -17,6 +17,7 @@ from .base import Base
 
 if TYPE_CHECKING:
     from ._options import TrajectoryResult
+    from .neural import AcropoleFuelFlow, PhysicsCorrectedFuelFlow
 
 
 class CompleteFlight(Base):
@@ -34,6 +35,7 @@ class CompleteFlight(Base):
         performance_model: str = "openap",
         bada_path: str | None = None,
         payload: float | None = None,
+        fuel_model: AcropoleFuelFlow | PhysicsCorrectedFuelFlow | None = None,
     ) -> None:
         super().__init__(
             actype,
@@ -46,6 +48,7 @@ class CompleteFlight(Base):
             performance_model=performance_model,
             bada_path=bada_path,
             payload=payload,
+            fuel_model=fuel_model,
         )
 
     def init_conditions(self, **kwargs: Any) -> None:

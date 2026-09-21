@@ -13,6 +13,7 @@ from .fleet import (
     SeparationConfig,
 )
 from .full import CompleteFlight
+from .neural import AcropoleFuelFlow, PhysicsCorrectedFuelFlow
 from .routes import (
     OptimizedRouteOption,
     RouteChoiceResult,
@@ -25,6 +26,7 @@ from .routes import (
 from .routing import RouteSelectionConfig
 
 __all__ = [
+    "AcropoleFuelFlow",
     "Base",
     "Climb",
     "CompleteFlight",
@@ -35,6 +37,7 @@ __all__ = [
     "MultiAircraftResult",
     "OptimizedRouteOption",
     "PairSeparationReport",
+    "PhysicsCorrectedFuelFlow",
     "RouteChoiceResult",
     "RouteNetwork",
     "RouteNetworkSelection",

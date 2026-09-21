@@ -28,6 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+neural = ["casadi>=3.8.1", "onnx>=1.18"]
 replay = [
     "traffic>=2",
     "fastmeteo>=1.2.0",
@@ -90,6 +91,10 @@ reportMissingImports = false          # CasADi / pyproj / sklearn / openap don't
 [tool.hatch.build.targets.wheel]
 universal = true
 packages = ["opentop"]
+
+[tool.uv]
+# The neural experiment deliberately uses the newly released ONNX importer.
+exclude-newer-package = { casadi = false }
 
 [build-system]
 requires = ["hatchling"]

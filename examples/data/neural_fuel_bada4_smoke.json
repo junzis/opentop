@@ -1,0 +1,66 @@
+{
+  "acropole_commit": "37f8d182dc7dce69fb0274576fefa4139bc77411",
+  "model_sha256": "8f49a3ad589e75156260573023a220a3f93a604392e597b42a5b24effc4215ab",
+  "params_sha256": "d7ca577001dcd16022d621e3c8200337746a17dec42a42b7a9e906e9b843354a",
+  "versions": {
+    "casadi": "3.8.1",
+    "onnx": "1.22.0",
+    "onnxruntime": "1.24.4",
+    "openap": "2.6.0",
+    "opentop": "2.6.0",
+    "numpy": "2.4.4"
+  },
+  "validation": {
+    "samples": 1000,
+    "seed": 20260918,
+    "max_absolute_error_kg_s": 5.034524004687846e-06,
+    "max_relative_error": 6.955882178631109e-06,
+    "scaled_gradient_max_error": 1.7738241431253243e-11,
+    "scaled_hessian_max_error": 1.3514704980122083e-11,
+    "import_seconds": 0.10156245203688741
+  },
+  "experiment": {
+    "aircraft": "A320-214",
+    "force_model": "bada4",
+    "bada_path": "/home/junzi/arc/data/bada_4.2/tables",
+    "origin": "EHAM",
+    "destination": "EDDF",
+    "m0_fraction": 0.85,
+    "altitude_bounds_ft": [
+      30000,
+      37000
+    ],
+    "constant_altitude": true,
+    "constant_mach": true,
+    "wind": false,
+    "speed_derivatives": "zero",
+    "nodes": 12,
+    "polydeg": 3,
+    "hessian": "exact",
+    "max_iter": 800
+  },
+  "solves": {
+    "bada4": {
+      "success": true,
+      "status": "Solve_Succeeded",
+      "iterations": 21,
+      "build_and_solve_seconds": 5.391935974010266,
+      "fuel_kg": 1035.8394007714087,
+      "objective_kg": 1035.8394007703744,
+      "altitude_ft": 33198.0,
+      "mach": 0.736518,
+      "duration_s": 1663.6794
+    },
+    "acropole": {
+      "success": true,
+      "status": "Solve_Succeeded",
+      "iterations": 25,
+      "build_and_solve_seconds": 5.181967930984683,
+      "fuel_kg": 1120.7689428345184,
+      "objective_kg": 1120.768942833587,
+      "altitude_ft": 32012.0,
+      "mach": 0.787374,
+      "duration_s": 1548.0717
+    }
+  }
+}

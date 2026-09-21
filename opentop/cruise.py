@@ -16,6 +16,7 @@ from .base import Base
 
 if TYPE_CHECKING:
     from ._options import TrajectoryResult
+    from .neural import AcropoleFuelFlow, PhysicsCorrectedFuelFlow
 
 
 class Cruise(Base):
@@ -36,6 +37,7 @@ class Cruise(Base):
         h_min: float | None = None,
         h_max: float | None = None,
         payload: float | None = None,
+        fuel_model: AcropoleFuelFlow | PhysicsCorrectedFuelFlow | None = None,
     ) -> None:
         super().__init__(
             actype,
@@ -48,6 +50,7 @@ class Cruise(Base):
             performance_model=performance_model,
             bada_path=bada_path,
             payload=payload,
+            fuel_model=fuel_model,
         )
 
         self.fix_mach = False
