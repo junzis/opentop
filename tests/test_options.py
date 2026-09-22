@@ -74,3 +74,14 @@ def test_trajectory_result_is_frozen():
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         r.success = False  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "exact_grid_cost, expected", [(0.0, 0.0), (2.5, 2.5), (None, 9.0)]
+)
+def test_build_result_prefers_exact_grid_cost(exact_grid_cost, expected):
+    from opentop._options import build_result
+
+    df = pd.DataFrame({"mass": [100.0, 99.0], "grid_cost": [9.0, float("nan")]})
+    result = build_result(df, {"success": True}, 3.0, exact_grid_cost)
+    assert result.grid_cost == expected

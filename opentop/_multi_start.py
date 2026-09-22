@@ -125,7 +125,7 @@ def run_multi_start(
                 runs if none converged).
             candidates: list of per-start dicts, best-first ordered.
                 Each dict has keys: start_index, objective, fuel,
-                grid_cost, success, return_status, iters, perturbation,
+                grid_cost, grid_cost_exact, success, return_status, iters, perturbation,
                 wall_time_s, trajectory.
 
     Raises:
@@ -160,11 +160,12 @@ def run_multi_start(
         grid = (
             float(df["grid_cost"].sum(skipna=True)) if has_interpolant else float("nan")
         )
+        exact_grid_cost = getattr(optimizer, "grid_cost_value", None)
         return {
             "start_index": index,
             "objective": float(getattr(optimizer, "objective_value", float("nan"))),
             "grid_cost_exact": float(
-                getattr(optimizer, "grid_cost_value", None) or float("nan")
+                exact_grid_cost if exact_grid_cost is not None else float("nan")
             ),
             "fuel": float(df["mass"].iloc[0] - df["mass"].iloc[-1]),
             "grid_cost": grid,
@@ -206,7 +207,8 @@ def run_multi_start(
             candidates.append(_make_candidate(i, df_i, lat_km, alt_ft, wall))
 
     candidates = _rank_candidates(candidates)
-    # The attributes must describe the RETURNED trajectory, not the last start.
+    # Costs describe the returned trajectory. Solver stats continue to describe
+    # the most recent solve; the winning stats are available in candidates[0].
     optimizer.objective_value = candidates[0]["objective"]
     optimizer.grid_cost_value = candidates[0]["grid_cost_exact"]
     return candidates[0]["trajectory"], candidates
