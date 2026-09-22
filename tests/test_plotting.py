@@ -34,5 +34,7 @@ def test_wind_key_has_semitransparent_background():
 
     plotting.add_wind_vector_key(axis, vectors)
 
-    assert 0 < axis.patches[-1].get_alpha() < 1
+    alpha = axis.patches[-1].get_alpha()
+    assert alpha is not None
+    assert 0 < alpha < 1
     plt.close(fig)

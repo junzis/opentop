@@ -66,4 +66,6 @@ def test_polywind_numeric_matches_symbolic_evaluation(
     calc = getattr(w, component)
     symbols = [symbol_type.sym(name) for name in ("x", "y", "h", "ts")]
     f = ca.Function("wind", symbols, [calc(*symbols)])
-    assert float(f(x, y, h, ts)) == pytest.approx(float(calc(x, y, h, ts)), abs=1e-6)
+    evaluated = f(x, y, h, ts)
+    assert isinstance(evaluated, ca.DM)
+    assert float(evaluated) == pytest.approx(float(calc(x, y, h, ts)), abs=1e-6)
