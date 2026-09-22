@@ -1,6 +1,7 @@
 """Tests for the multi-start trajectory wrapper and its helpers."""
 
 import math
+from types import SimpleNamespace
 
 import pytest
 
@@ -389,6 +390,8 @@ class TestMultiStartWithInterpolant:
         for c in candidates:
             assert isinstance(c["grid_cost"], float)
             assert not math.isnan(c["grid_cost"])  # populated, not NaN
+            assert c["grid_cost_exact"] == pytest.approx(0.0, abs=1e-12)
+        assert opt.grid_cost_value == pytest.approx(0.0, abs=1e-12)
 
     def test_grid_cost_nan_when_no_interpolant(self, _fast_optimizer):
         """Without an interpolant, grid_cost in each candidate is NaN
@@ -412,3 +415,40 @@ class TestMultiStartResultObject:
         assert isinstance(trajectory, pd.DataFrame)
         for c in candidates:
             assert isinstance(c["trajectory"], pd.DataFrame)
+
+
+@pytest.mark.parametrize("exact_grid_cost", [0.0, 12.5, None])
+def test_multi_start_restores_winning_costs(monkeypatch, exact_grid_cost):
+    """The first start wins, even though the last solve has different costs."""
+    from opentop._multi_start import run_multi_start
+
+    first = _make_canonical_df()
+    last = _make_canonical_df()
+    outcomes = iter([(first, 1.0, exact_grid_cost), (last, 2.0, 99.0)])
+    opt = SimpleNamespace(
+        proj=None,
+        _last_solution=SimpleNamespace(
+            stats=lambda: {"success": True, "return_status": "Solve_Succeeded"}
+        ),
+    )
+
+    def trajectory(**kwargs):
+        df, opt.objective_value, opt.grid_cost_value = next(outcomes)
+        return df
+
+    opt.trajectory = trajectory
+    monkeypatch.setattr(
+        "opentop._multi_start._perturb_guess", lambda df, *args, **kwargs: df
+    )
+    df, candidates = run_multi_start(opt, n_starts=2, seed=0)
+
+    assert df is first
+    assert candidates[0]["start_index"] == 0
+    assert opt.objective_value == 1.0
+    assert candidates[1]["grid_cost_exact"] == 99.0
+    if exact_grid_cost is None:
+        assert math.isnan(opt.grid_cost_value)
+        assert math.isnan(candidates[0]["grid_cost_exact"])
+    else:
+        assert opt.grid_cost_value == exact_grid_cost
+        assert candidates[0]["grid_cost_exact"] == exact_grid_cost

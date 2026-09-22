@@ -54,7 +54,10 @@ class TrajectoryResult:
 
 
 def build_result(
-    df: pd.DataFrame | None, stats: dict, objective: float
+    df: pd.DataFrame | None,
+    stats: dict,
+    objective: float,
+    exact_grid_cost: float | None = None,
 ) -> TrajectoryResult:
     """Package a DataFrame + solver stats + objective into a TrajectoryResult.
 
@@ -73,11 +76,15 @@ def build_result(
         and "grid_cost" in result_df.columns
         and bool(result_df["grid_cost"].notna().any())
     )
-    grid_cost = (
-        float(result_df["grid_cost"].sum(skipna=True))
-        if has_grid_cost
-        else float("nan")
-    )
+    # Prefer the solver's own collocation quadrature when the solve recorded
+    # one. Summing the per-node column is a left-endpoint rectangle rule and is
+    # not the quantity IPOPT minimised.
+    if exact_grid_cost is not None:
+        grid_cost = float(exact_grid_cost)
+    elif has_grid_cost:
+        grid_cost = float(result_df["grid_cost"].sum(skipna=True))
+    else:
+        grid_cost = float("nan")
     return TrajectoryResult(
         df=result_df,
         success=bool(stats.get("success", False)),
