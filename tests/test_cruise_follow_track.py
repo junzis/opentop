@@ -143,12 +143,10 @@ class TestEndpointValidation:
 
 
 class TestFollowTrackTrajectory:
-    @pytest.mark.parametrize("tolerance_m", [100.0, 1000.0])
-    def test_trajectory_follows_bowed_track(self, opt, monkeypatch, tolerance_m):
+    def test_trajectory_follows_bowed_track(self, opt, monkeypatch):
+        tolerance_m = 1000.0
         lat, lon = _track_between(opt, n=25, bow_deg=0.3)
-        if tolerance_m < 1000:
-            opt.setup(nodes=40, max_iter=600)
-        opt.follow_track(lat, lon, tolerance_m=tolerance_m)
+        opt.follow_track(lat, lon)
         captured = []
         original = opt._add_formulation
 
@@ -297,7 +295,8 @@ def test_endpoint_snapping_does_not_mutate_input(opt):
     assert float(y_ref(0)) == pytest.approx(expected_y, abs=1e-5)
 
 
-def test_interior_constraints_reject_an_off_track_arc():
+@pytest.mark.parametrize("tolerance_m", [100.0, 1000.0])
+def test_interior_constraints_reject_an_off_track_arc(tolerance_m):
     from types import SimpleNamespace
 
     from opentop._track import constrain_track
@@ -319,11 +318,11 @@ def test_interior_constraints_reject_an_off_track_arc():
             10000 * tau, 4 * tau * (1 - tau) * amplitude
         ),
     )
-    constrain_track(transcription, track, tolerance_m=1000.0)
+    constrain_track(transcription, track, tolerance_m=tolerance_m)
     constraint = np.asarray(problem.debug.value(problem.g, problem.initial()))
     upper = np.asarray(problem.debug.value(problem.ubg, problem.initial()))
     assert np.max(constraint - upper) > 1.0
-    problem.set_initial(amplitude, 0.0)
+    problem.set_initial(amplitude, tolerance_m / 2)
     constraint = np.asarray(problem.debug.value(problem.g, problem.initial()))
     lower = np.asarray(problem.debug.value(problem.lbg, problem.initial()))
     assert np.all(constraint <= upper + 1e-8)
