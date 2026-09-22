@@ -178,17 +178,6 @@ class Base:
         return self.mass_min, mass_init_ub
 
     @property
-    def solver(self):
-        """Deprecated: use ``optimizer.stats`` or ``optimizer.success``."""
-        warnings.warn(
-            "optimizer.solver is deprecated; use optimizer.stats or optimizer.success. "
-            "Will be removed in v2.3.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self._last_solution
-
-    @property
     def stats(self) -> dict:
         """Solver stats dict from the most recent solve."""
         if self._last_solution is None:

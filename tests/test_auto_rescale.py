@@ -1,5 +1,6 @@
 """Tests for the auto_rescale_objective kwarg on trajectory()."""
 
+import casadi as ca
 import pytest
 
 import opentop as top
@@ -15,6 +16,7 @@ def rescaled_optimizer_df(aircraft_type, short_flight):
     )
     opt.setup(max_iter=500)
     df = opt.trajectory(objective="fuel", auto_rescale_objective=True)
+    assert opt.success, opt.stats
     return opt, df
 
 
@@ -28,6 +30,7 @@ def baseline_optimizer_df(aircraft_type, short_flight):
     )
     opt.setup(max_iter=500)
     df = opt.trajectory(objective="fuel")
+    assert opt.success, opt.stats
     return opt, df
 
 
@@ -42,7 +45,8 @@ class TestAutoRescale:
     def test_objective_value_is_physical(self, rescaled_optimizer_df):
         opt, df = rescaled_optimizer_df
         fuel = df.mass.iloc[0] - df.mass.iloc[-1]
-        assert abs(opt.objective_value - fuel) / fuel < 0.01
+        # Allow accumulated collocation feasibility residuals (0.1 gram).
+        assert opt.objective_value == pytest.approx(fuel, abs=1e-4)
 
     def test_rescale_factor_stored(self, rescaled_optimizer_df):
         opt, _ = rescaled_optimizer_df
@@ -68,7 +72,7 @@ class TestAutoRescale:
         def tiny_obj(x, u, dt, **kwargs):
             return opt.obj_fuel(x, u, dt, **kwargs) * 1e-12
 
-        opt.trajectory(objective=tiny_obj, auto_rescale_objective=True)
+        opt._add_formulation(ca.Opti(), tiny_obj, auto_rescale_objective=True)
         assert 0 < opt._objective_rescale < 1.0
 
     def test_zero_objective_no_rescale(self, aircraft_type, short_flight):
@@ -86,5 +90,5 @@ class TestAutoRescale:
         def zero_obj(x, u, dt, **kwargs):
             return opt.obj_fuel(x, u, dt, **kwargs) * 0.0
 
-        opt.trajectory(objective=zero_obj, auto_rescale_objective=True)
+        opt._add_formulation(ca.Opti(), zero_obj, auto_rescale_objective=True)
         assert opt._objective_rescale == 1.0

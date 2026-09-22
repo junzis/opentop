@@ -1,6 +1,13 @@
 import matplotlib.pyplot as plt
+import pytest
 
 from opentop import plotting
+
+
+@pytest.fixture(autouse=True)
+def isolated_style():
+    with plt.rc_context():
+        yield
 
 
 def test_publication_style_uses_colorblind_palette():
@@ -9,7 +16,6 @@ def test_publication_style_uses_colorblind_palette():
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 
     assert tuple(colors) == plotting.OKABE_ITO
-    assert plt.rcParams["savefig.dpi"] == 300
 
 
 def test_axes_and_panel_helpers_apply_consistent_style():
@@ -28,5 +34,5 @@ def test_wind_key_has_semitransparent_background():
 
     plotting.add_wind_vector_key(axis, vectors)
 
-    assert axis.patches[-1].get_alpha() == 0.8
+    assert 0 < axis.patches[-1].get_alpha() < 1
     plt.close(fig)

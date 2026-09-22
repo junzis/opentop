@@ -1,6 +1,7 @@
 """Pin PolyWind numeric and symbolic output. Regression guard for the eval() rewrite."""
 
 import casadi as ca
+import pytest
 
 import numpy as np
 import opentop.tools as tools
@@ -32,47 +33,37 @@ def _proj():
     return pyproj.Proj(proj="lcc", lat_1=46, lat_2=54, lat_0=50, lon_0=5)
 
 
-def test_polywind_numeric_output_sane():
-    df = _fake_wind_df()
+@pytest.fixture(scope="module")
+def wind():
     proj = _proj()
-    w = tools.PolyWind(df, proj, 46.0, 1.0, 54.0, 9.0)
+    return tools.PolyWind(_fake_wind_df(), proj, 46.0, 1.0, 54.0, 9.0), proj
+
+
+def test_polywind_numeric_output_sane(wind):
+    w, proj = wind
     x, y = proj(5.0, 50.0)
-    u = w.calc_u(x, y, 5000, 1800)
-    v = w.calc_v(x, y, 5000, 1800)
-    assert np.isfinite(float(u))
-    assert np.isfinite(float(v))
-    # Synthetic u = 55, v = 0.2; ridge regularization → loose bounds.
-    assert 20 < float(u) < 90
-    assert -10 < float(v) < 10
+    # Ridge regularization means the fitted field approximates the input.
+    assert 20 < float(w.calc_u(x, y, 5000, 1800)) < 90
+    assert -10 < float(w.calc_v(x, y, 5000, 1800)) < 10
 
 
-def test_polywind_symbolic_path_returns_casadi_expr():
-    """When inputs are CasADi SX, output must be a symbolic expression, not a float."""
-    df = _fake_wind_df()
-    proj = _proj()
-    w = tools.PolyWind(df, proj, 46.0, 1.0, 54.0, 9.0)
-    x = ca.SX.sym("x")  # type: ignore[arg-type]  # CasADi stubs wrong: SX.sym(str) is valid
-    y = ca.SX.sym("y")  # type: ignore[arg-type]
-    h = ca.SX.sym("h")  # type: ignore[arg-type]
-    ts = ca.SX.sym("ts")  # type: ignore[arg-type]
-    u = w.calc_u(x, y, h, ts)
-    v = w.calc_v(x, y, h, ts)
-    # Result must be a CasADi SX (symbolic), not a plain float.
-    assert isinstance(u, ca.SX) or isinstance(u, ca.MX)
-    assert isinstance(v, ca.SX) or isinstance(v, ca.MX)
-
-
-def test_polywind_numeric_matches_symbolic_evaluation():
-    """Same input via numeric and symbolic paths should produce the same number."""
-    df = _fake_wind_df()
-    proj = _proj()
-    w = tools.PolyWind(df, proj, 46.0, 1.0, 54.0, 9.0)
-    x_num, y_num = proj(5.0, 50.0)
-    # numeric path
-    u_num = float(w.calc_u(x_num, y_num, 5000, 1800))
-    # symbolic path, then substitute
-    x, y, h, ts = ca.SX.sym("x"), ca.SX.sym("y"), ca.SX.sym("h"), ca.SX.sym("ts")  # type: ignore[arg-type]  # CasADi stubs wrong
-    u_sym = w.calc_u(x, y, h, ts)
-    f = ca.Function("f", [x, y, h, ts], [u_sym])
-    u_eval = float(f(x_num, y_num, 5000, 1800))  # type: ignore[arg-type]  # CasADi Function.__call__ return type opaque to pyright
-    assert abs(u_num - u_eval) < 1e-6, f"numeric {u_num} != symbolic eval {u_eval}"
+@pytest.mark.parametrize("component", ["calc_u", "calc_v"])
+@pytest.mark.parametrize(
+    "point",
+    [
+        (5.0, 50.0, 5000.0, 1800.0),
+        (2.0, 47.0, 2000.0, 0.0),
+        (8.0, 53.0, 9000.0, 3600.0),
+    ],
+)
+@pytest.mark.parametrize("symbol_type", [ca.SX, ca.MX])
+def test_polywind_numeric_matches_symbolic_evaluation(
+    wind, component, point, symbol_type
+):
+    w, proj = wind
+    lon, lat, h, ts = point
+    x, y = proj(lon, lat)
+    calc = getattr(w, component)
+    symbols = [symbol_type.sym(name) for name in ("x", "y", "h", "ts")]
+    f = ca.Function("wind", symbols, [calc(*symbols)])
+    assert float(f(x, y, h, ts)) == pytest.approx(float(calc(x, y, h, ts)), abs=1e-6)

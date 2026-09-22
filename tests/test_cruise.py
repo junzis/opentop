@@ -1,8 +1,10 @@
 """Tests for the Cruise trajectory optimizer."""
 
+import casadi as ca
 import pytest
 from openap.aero import ft
 
+import numpy as np
 import opentop as top
 import pandas as pd
 
@@ -15,7 +17,9 @@ def cruise_df(aircraft_type, short_flight):
         short_flight["destination"],
         short_flight["m0"],
     )
-    return optimizer.trajectory(objective="fuel")
+    df = optimizer.trajectory(objective="fuel")
+    assert optimizer.success, optimizer.stats
+    return df
 
 
 @pytest.fixture(scope="module")
@@ -26,7 +30,9 @@ def cruise_time_df(aircraft_type, short_flight):
         short_flight["destination"],
         short_flight["m0"],
     )
-    return optimizer.trajectory(objective="time")
+    df = optimizer.trajectory(objective="time")
+    assert optimizer.success, optimizer.stats
+    return df
 
 
 @pytest.fixture(scope="module")
@@ -37,7 +43,9 @@ def cruise_medium_df(aircraft_type, medium_flight):
         medium_flight["destination"],
         medium_flight["m0"],
     )
-    return optimizer.trajectory(objective="fuel")
+    df = optimizer.trajectory(objective="fuel")
+    assert optimizer.success, optimizer.stats
+    return df
 
 
 class TestCruise:
@@ -52,8 +60,10 @@ class TestCruise:
         assert cruise_df.altitude.min() > 20000
         assert cruise_df.altitude.max() < 45000
 
-    def test_heading_reasonable(self, cruise_df):
-        assert cruise_df.heading.max() - cruise_df.heading.min() < 30
+    def test_turn_rate_within_limit(self, cruise_df):
+        heading = np.unwrap(np.deg2rad(cruise_df.heading.to_numpy()))
+        turn_rate = np.diff(heading) / np.diff(cruise_df.ts.to_numpy())
+        assert np.max(np.abs(turn_rate)) <= np.deg2rad(0.5) + 1e-6
 
     def test_mass_decreases(self, cruise_df):
         assert cruise_df.mass.iloc[-1] < cruise_df.mass.iloc[0]
@@ -150,35 +160,6 @@ def test_cruise_rejects_payload_above_mtow(aircraft_type, short_flight):
         )
 
 
-def test_cruise_initial_guess_is_honored_with_no_double_init(
-    aircraft_type, short_flight
-):
-    """Guard: passing initial_guess= must not require x_guess to be built twice.
-
-    This pins the post-fix behavior -- init_conditions is called once, the guess
-    is honored, and trajectory converges.
-    """
-    import opentop as top
-
-    opt = top.Cruise(
-        aircraft_type,
-        short_flight["origin"],
-        short_flight["destination"],
-        short_flight["m0"],
-    )
-    baseline = opt.trajectory(objective="fuel")
-
-    opt2 = top.Cruise(
-        aircraft_type,
-        short_flight["origin"],
-        short_flight["destination"],
-        short_flight["m0"],
-    )
-    result = opt2.trajectory(objective="fuel", initial_guess=baseline)  # type: ignore[arg-type]  # trajectory() without result_object returns DataFrame; passes as initial_guess
-    assert result is not None
-    assert len(result) == len(baseline)  # type: ignore[arg-type]  # trajectory() without result_object always returns DataFrame
-
-
 def test_cruise_terminal_performance_uses_shared_thrust_helper(
     monkeypatch, aircraft_type, short_flight
 ):
@@ -240,3 +221,28 @@ def test_cruise_terminal_performance_uses_shared_thrust_helper(
             tas = performance_calls[opt.nodes + 1 + k * opt.polydeg + j][1]
             assert ca.depends_on(tas, built["U"][k])
             assert ca.depends_on(tas, built["U"][k + 1])
+
+
+def test_fuel_cost_sum_matches_mass_difference(cruise_df):
+    mass_difference = cruise_df.mass.iloc[0] - cruise_df.mass.iloc[-1]
+    assert cruise_df.fuel_cost.sum() == pytest.approx(mass_difference, abs=1e-8)
+
+
+def test_cruise_formulation_preserves_supplied_initial_guess():
+    opt = top.Cruise("A320", "EHAM", "EDDF", 0.85)
+    opt.setup(nodes=2)
+    guess = pd.DataFrame(
+        {
+            "longitude": [opt.lon1, (opt.lon1 + opt.lon2) / 2, opt.lon2],
+            "latitude": [opt.lat1, (opt.lat1 + opt.lat2) / 2, opt.lat2],
+            "altitude": [30000.0, 31000.0, 32000.0],
+            "mass": [65000.0, 64800.0, 64500.0],
+            "ts": [0.0, 800.0, 1900.0],
+        }
+    )
+    problem = ca.Opti()
+    tr = opt._add_formulation(problem, initial_guess=guess)
+    x, y = opt.proj(guess.longitude.to_numpy(), guess.latitude.to_numpy())
+    expected = np.column_stack([x, y, guess.altitude * ft, guess.mass, guess.ts])
+    for state, row in zip(tr.X, expected):
+        np.testing.assert_allclose(problem.debug.value(state, problem.initial()), row)

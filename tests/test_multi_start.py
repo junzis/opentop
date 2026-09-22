@@ -8,7 +8,7 @@ import pytest
 import numpy as np
 import opentop as top
 import pandas as pd
-from opentop._multi_start import _perturb_guess
+from opentop._multi_start import _perturb_guess, run_multi_start
 
 
 def _make_canonical_df(
@@ -141,55 +141,55 @@ class TestPerturbGuessLateral:
         pd.testing.assert_frame_equal(a, b)
 
 
-@pytest.fixture(scope="module")
-def _fast_optimizer():
-    """A minimal Cruise optimizer used across multi-start integration tests.
-    Short route and coarse grid to keep wall time under a minute."""
-    opt = top.Cruise(
-        "A320",
-        (52.362, 13.501),
-        (52.560, 13.287),  # short intra-Berlin hop; solver converges fast
-        m0=0.85,
+@pytest.fixture
+def fake_optimizer(proj):
+    """Deterministic solver substitute for orchestration and seed tests."""
+    opt = SimpleNamespace(
+        proj=proj,
+        objective_value=5000.0,
+        grid_cost_value=None,
+        calls=[],
+        solved=_make_canonical_df(),
+        _last_solution=SimpleNamespace(
+            stats=lambda: {
+                "success": True,
+                "return_status": "Solve_Succeeded",
+                "iter_count": 7,
+            }
+        ),
     )
-    opt.setup(max_iter=500)
+
+    def trajectory(**kwargs):
+        assert "result_object" not in kwargs
+        opt.calls.append(kwargs)
+        return opt.solved
+
+    opt.trajectory = trajectory
+    opt.multi_start_trajectory = lambda **kwargs: run_multi_start(opt, **kwargs)
     return opt
 
 
 class TestMultiStartGuards:
-    def test_n_starts_zero_raises(self, _fast_optimizer):
+    def test_n_starts_zero_raises(self, fake_optimizer):
         with pytest.raises(ValueError, match="n_starts"):
-            _fast_optimizer.multi_start_trajectory(objective="fuel", n_starts=0)
+            fake_optimizer.multi_start_trajectory(objective="fuel", n_starts=0)
 
-    def test_n_starts_negative_raises(self, _fast_optimizer):
+    def test_n_starts_negative_raises(self, fake_optimizer):
         with pytest.raises(ValueError, match="n_starts"):
-            _fast_optimizer.multi_start_trajectory(objective="fuel", n_starts=-3)
+            fake_optimizer.multi_start_trajectory(objective="fuel", n_starts=-3)
 
 
 class TestMultiStartSingle:
-    def test_n_starts_one_returns_tuple(self, _fast_optimizer):
-        trajectory, candidates = _fast_optimizer.multi_start_trajectory(
+    def test_n_starts_one_returns_tuple(self, fake_optimizer):
+        trajectory, candidates = fake_optimizer.multi_start_trajectory(
             objective="fuel", n_starts=1
         )
         assert isinstance(trajectory, pd.DataFrame)
         assert isinstance(candidates, list)
         assert len(candidates) == 1
 
-    def test_n_starts_one_matches_plain_trajectory(self, _fast_optimizer):
-        """With n_starts=1 the returned trajectory must equal what a plain
-        trajectory() call would produce (no perturbation, same seed
-        independence)."""
-        ms_traj, _ = _fast_optimizer.multi_start_trajectory(
-            objective="fuel", n_starts=1
-        )
-        plain_traj = _fast_optimizer.trajectory(objective="fuel")
-        # Compare on a subset of columns that are directly comparable
-        # (mass, altitude from the mass trajectory).
-        np.testing.assert_allclose(
-            ms_traj["mass"].values, plain_traj["mass"].values, rtol=1e-6
-        )
-
-    def test_candidate_zero_has_expected_fields(self, _fast_optimizer):
-        trajectory, candidates = _fast_optimizer.multi_start_trajectory(
+    def test_candidate_zero_has_expected_fields(self, fake_optimizer):
+        trajectory, candidates = fake_optimizer.multi_start_trajectory(
             objective="fuel", n_starts=1
         )
         c = candidates[0]
@@ -213,50 +213,29 @@ class TestMultiStartSingle:
         # The returned `trajectory` must be the same object stored in the
         # winning candidate's trajectory field.
         assert trajectory is c["trajectory"]
+        assert trajectory is fake_optimizer.solved
+        assert fake_optimizer.calls == [{"objective": "fuel"}]
 
-    def test_n_starts_one_forwards_initial_guess_to_trajectory(self, _fast_optimizer):
-        """The n_starts=1 fast path must forward `initial_guess=` through to
-        the underlying trajectory() call. Verify by spying on trajectory."""
-        # First, get a real trajectory DataFrame to use as initial_guess.
-        baseline = _fast_optimizer.trajectory(objective="fuel")
-
-        captured = {}
-        original_trajectory = _fast_optimizer.trajectory
-
-        def spy(*args, **kwargs):
-            captured.update(kwargs)
-            return original_trajectory(*args, **kwargs)
-
-        _fast_optimizer.trajectory = spy
-        try:
-            _fast_optimizer.multi_start_trajectory(
-                objective="fuel",
-                n_starts=1,
-                initial_guess=baseline,
-            )
-        finally:
-            _fast_optimizer.trajectory = original_trajectory
-
-        assert "initial_guess" in captured, "initial_guess kwarg was dropped"
-        assert captured["initial_guess"] is baseline, (
-            "initial_guess was forwarded but not as the same object"
-        )
+    def test_n_starts_one_forwards_initial_guess_to_trajectory(self, fake_optimizer):
+        guess = _make_canonical_df()
+        fake_optimizer.multi_start_trajectory(n_starts=1, initial_guess=guess)
+        assert fake_optimizer.calls[0]["initial_guess"] is guess
 
 
 class TestMultiStartLoop:
-    def test_n_starts_two_produces_two_candidates(self, _fast_optimizer):
-        _, candidates = _fast_optimizer.multi_start_trajectory(
+    def test_n_starts_two_produces_two_candidates(self, fake_optimizer):
+        _, candidates = fake_optimizer.multi_start_trajectory(
             objective="fuel", n_starts=2, seed=0
         )
-        assert len(candidates) == 2
+        assert len(candidates) == len(fake_optimizer.calls) == 2
         # Start indices should be consecutive 0, 1 after sort (ranking is by
         # success/objective, not by start index). But every candidate must
         # exist with its start_index intact.
         indices = sorted(c["start_index"] for c in candidates)
         assert indices == [0, 1]
 
-    def test_perturbation_drawn_within_jitter_range(self, _fast_optimizer):
-        _, candidates = _fast_optimizer.multi_start_trajectory(
+    def test_perturbation_drawn_within_jitter_range(self, fake_optimizer):
+        _, candidates = fake_optimizer.multi_start_trajectory(
             objective="fuel",
             n_starts=4,
             lateral_jitter_km=50.0,
@@ -274,30 +253,30 @@ class TestMultiStartLoop:
             assert abs(c["perturbation"]["lateral_km"]) <= 50.0
             assert abs(c["perturbation"]["altitude_ft"]) <= 1500.0
 
-    def test_seed_is_reproducible(self, _fast_optimizer):
-        _, cand_a = _fast_optimizer.multi_start_trajectory(
+    def test_seed_is_reproducible(self, fake_optimizer):
+        _, cand_a = fake_optimizer.multi_start_trajectory(
             objective="fuel", n_starts=3, seed=42
         )
-        _, cand_b = _fast_optimizer.multi_start_trajectory(
+        _, cand_b = fake_optimizer.multi_start_trajectory(
             objective="fuel", n_starts=3, seed=42
         )
         pert_a = {c["start_index"]: c["perturbation"] for c in cand_a}
         pert_b = {c["start_index"]: c["perturbation"] for c in cand_b}
         assert pert_a == pert_b
 
-    def test_different_seeds_produce_different_perturbations(self, _fast_optimizer):
-        _, cand_a = _fast_optimizer.multi_start_trajectory(
+    def test_different_seeds_produce_different_perturbations(self, fake_optimizer):
+        _, cand_a = fake_optimizer.multi_start_trajectory(
             objective="fuel", n_starts=3, seed=1
         )
-        _, cand_b = _fast_optimizer.multi_start_trajectory(
+        _, cand_b = fake_optimizer.multi_start_trajectory(
             objective="fuel", n_starts=3, seed=2
         )
         pert_a = {c["start_index"]: c["perturbation"] for c in cand_a}
         pert_b = {c["start_index"]: c["perturbation"] for c in cand_b}
         assert any(pert_a[i] != pert_b[i] for i in (1, 2))
 
-    def test_zero_jitter_makes_all_perturbations_zero(self, _fast_optimizer):
-        _, candidates = _fast_optimizer.multi_start_trajectory(
+    def test_zero_jitter_makes_all_perturbations_zero(self, fake_optimizer):
+        _, candidates = fake_optimizer.multi_start_trajectory(
             objective="fuel",
             n_starts=3,
             lateral_jitter_km=0.0,
@@ -308,8 +287,8 @@ class TestMultiStartLoop:
             assert c["perturbation"]["lateral_km"] == 0.0
             assert c["perturbation"]["altitude_ft"] == 0.0
 
-    def test_winner_is_first_in_list(self, _fast_optimizer):
-        trajectory, candidates = _fast_optimizer.multi_start_trajectory(
+    def test_winner_is_first_in_list(self, fake_optimizer):
+        trajectory, candidates = fake_optimizer.multi_start_trajectory(
             objective="fuel", n_starts=3, seed=0
         )
         assert trajectory is candidates[0]["trajectory"]
@@ -378,7 +357,7 @@ class TestMultiStartWithInterpolant:
                 "cost": np.zeros(lon_g.size),
             }
         )
-        interp = top.tools.interpolant_from_dataframe(df_cost, shape="bspline")
+        interp = top.tools.interpolant_from_dataframe(df_cost, shape="linear")
 
         trajectory, candidates = opt.multi_start_trajectory(
             objective="fuel",
@@ -388,16 +367,17 @@ class TestMultiStartWithInterpolant:
         )
         assert "grid_cost" in trajectory.columns
         for c in candidates:
+            assert c["success"], c["return_status"]
             assert isinstance(c["grid_cost"], float)
             assert not math.isnan(c["grid_cost"])  # populated, not NaN
             assert c["grid_cost_exact"] == pytest.approx(0.0, abs=1e-12)
         assert opt.grid_cost_value == pytest.approx(0.0, abs=1e-12)
 
-    def test_grid_cost_nan_when_no_interpolant(self, _fast_optimizer):
+    def test_grid_cost_nan_when_no_interpolant(self, fake_optimizer):
         """Without an interpolant, grid_cost in each candidate is NaN
         (consistent with the DataFrame's grid_cost column, which is all-NaN
         without an interpolant)."""
-        _, candidates = _fast_optimizer.multi_start_trajectory(
+        _, candidates = fake_optimizer.multi_start_trajectory(
             objective="fuel", n_starts=2, seed=0
         )
         for c in candidates:
@@ -406,10 +386,10 @@ class TestMultiStartWithInterpolant:
 
 
 class TestMultiStartResultObject:
-    def test_multi_start_with_result_object_kwarg_does_not_crash(self, _fast_optimizer):
+    def test_multi_start_with_result_object_kwarg_does_not_crash(self, fake_optimizer):
         """result_object=True must be silently dropped; multi-start always returns
         DataFrames."""
-        trajectory, candidates = _fast_optimizer.multi_start_trajectory(
+        trajectory, candidates = fake_optimizer.multi_start_trajectory(
             objective="fuel", n_starts=1, result_object=True
         )
         assert isinstance(trajectory, pd.DataFrame)
@@ -420,8 +400,6 @@ class TestMultiStartResultObject:
 @pytest.mark.parametrize("exact_grid_cost", [0.0, 12.5, None])
 def test_multi_start_restores_winning_costs(monkeypatch, exact_grid_cost):
     """The first start wins, even though the last solve has different costs."""
-    from opentop._multi_start import run_multi_start
-
     first = _make_canonical_df()
     last = _make_canonical_df()
     outcomes = iter([(first, 1.0, exact_grid_cost), (last, 2.0, 99.0)])
@@ -452,3 +430,23 @@ def test_multi_start_restores_winning_costs(monkeypatch, exact_grid_cost):
     else:
         assert opt.grid_cost_value == exact_grid_cost
         assert candidates[0]["grid_cost_exact"] == exact_grid_cost
+
+
+def test_perturbed_starts_use_supplied_guess(fake_optimizer):
+    guess = _make_canonical_df(cruise_alt_ft=30000)
+    _, candidates = fake_optimizer.multi_start_trajectory(
+        n_starts=3,
+        seed=7,
+        initial_guess=guess,
+        lateral_jitter_km=0,
+    )
+    assert len(fake_optimizer.calls) == 3
+    assert fake_optimizer.calls[0]["initial_guess"] is guess
+    for candidate in candidates:
+        i = candidate["start_index"]
+        forwarded = fake_optimizer.calls[i]["initial_guess"]
+        np.testing.assert_allclose(
+            forwarded.altitude,
+            guess.altitude + candidate["perturbation"]["altitude_ft"],
+        )
+    assert (guess.altitude == 30000).all()

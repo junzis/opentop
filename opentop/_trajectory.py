@@ -68,11 +68,7 @@ def to_dataframe(
     X = x_opt if isinstance(x_opt, np.ndarray) else x_opt.full()
     U = u_opt if isinstance(u_opt, np.ndarray) else u_opt.full()
 
-    # Accept historical interval-control arrays for callers replaying saved data.
-    # New solves already contain the independently optimized terminal control.
-    if U.shape[1] == nodes:
-        U = np.append(U, U[:, -1:], axis=1)
-    elif U.shape[1] != nodes + 1:
+    if U.shape[1] != nodes + 1:
         raise ValueError("controls must have nodes + 1 boundary columns")
     n = nodes + 1
 

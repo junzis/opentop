@@ -3,7 +3,9 @@
 import casadi as ca
 import pytest
 
+import numpy as np
 import opentop as top
+import pandas as pd
 
 
 @pytest.fixture(scope="module")
@@ -17,20 +19,24 @@ def descent_optimizer(aircraft_type, medium_flight):
 
 
 @pytest.fixture(scope="module")
-def descent_clipped_df(descent_optimizer):
-    return descent_optimizer.trajectory(objective="fuel")
+def descent_clipped_df(descent_full_df):
+    return descent_full_df.query("vertical_rate < -100")
 
 
 @pytest.fixture(scope="module")
 def descent_full_df(descent_optimizer):
-    return descent_optimizer.trajectory(objective="fuel", remove_cruise=False)
+    df = descent_optimizer.trajectory(objective="fuel", remove_cruise=False)
+    assert descent_optimizer.success, descent_optimizer.stats
+    return df
 
 
 @pytest.fixture(scope="module")
 def descent_alt_start_df(descent_optimizer):
-    return descent_optimizer.trajectory(
+    df = descent_optimizer.trajectory(
         objective="fuel", alt_start=30000, remove_cruise=False
     )
+    assert descent_optimizer.success, descent_optimizer.stats
+    return df
 
 
 class TestDescent:
@@ -41,10 +47,6 @@ class TestDescent:
         for col in ("altitude", "heading", "vertical_rate"):
             assert col in df.columns
 
-    def test_remove_cruise_clips(self, descent_clipped_df, descent_full_df):
-        assert len(descent_clipped_df) <= len(descent_full_df)
-        assert (descent_clipped_df.vertical_rate < -100).all()
-
     def test_remove_cruise_false_includes_cruise(self, descent_full_df):
         assert (descent_full_df.vertical_rate.abs() < 100).any()
 
@@ -54,9 +56,10 @@ class TestDescent:
     def test_alt_start(self, descent_alt_start_df):
         assert abs(descent_alt_start_df.altitude.iloc[0] - 30000) < 500
 
-    def test_heading_reasonable(self, descent_full_df):
-        df = descent_full_df
-        assert df.heading.max() - df.heading.min() < 30
+    def test_turn_rate_within_limit(self, descent_full_df):
+        heading = np.unwrap(np.deg2rad(descent_full_df.heading.to_numpy()))
+        turn_rate = np.diff(heading) / np.diff(descent_full_df.ts.to_numpy())
+        assert np.max(np.abs(turn_rate)) <= np.deg2rad(0.5) + 1e-6
 
     def test_mass_decreases(self, descent_full_df):
         df = descent_full_df
@@ -91,3 +94,24 @@ class TestDescent:
             descent_optimizer._constrain_inbound_route_side(
                 opti, [], inbound_route_side="up"
             )
+
+
+@pytest.mark.parametrize("remove_cruise", [False, True])
+def test_remove_cruise_filters_threshold(monkeypatch, remove_cruise):
+    opt = top.Descent("A320", "EHAM", "EDDF", 0.85)
+    rates = [-101.0, -100.0, 0.0, 100.0, 101.0]
+    solved = pd.DataFrame({"vertical_rate": rates})
+    xp, yp = opt.proj(np.array([opt.lon1, opt.lon2]), np.array([opt.lat1, opt.lat2]))
+    cruise = pd.DataFrame(
+        {
+            "x": xp,
+            "y": yp,
+            "h": [9000.0] * 2,
+            "mach": [0.75] * 2,
+            "mass": [65000.0] * 2,
+        }
+    )
+    monkeypatch.setattr(opt, "_solve", lambda *args, **kwargs: solved)
+    result = opt.trajectory(df_cruise=cruise, remove_cruise=remove_cruise)
+    expected = solved.iloc[[0]] if remove_cruise else solved
+    pd.testing.assert_frame_equal(result, expected)

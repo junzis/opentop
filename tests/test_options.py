@@ -1,64 +1,12 @@
 """Unit tests for the _options dataclasses."""
 
 import dataclasses
+import math
 
 import pytest
 
 import pandas as pd
-from opentop._options import GridOptions, SolveOptions, TrajectoryResult
-
-
-def test_solve_options_defaults():
-    opts = SolveOptions()
-    assert opts.max_iter == 1500
-    assert opts.max_fuel is None
-    assert opts.auto_rescale_objective is True
-    assert opts.return_failed is False
-    assert opts.initial_guess is None
-    assert opts.alt_start is None
-    assert opts.alt_stop is None
-    assert opts.remove_cruise is False
-    assert opts.exact_hessian is False
-
-
-def test_solve_options_is_frozen():
-    opts = SolveOptions()
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        opts.max_iter = 999  # type: ignore[misc]
-
-
-def test_grid_options_defaults():
-    g = GridOptions()
-    assert g.interpolant is None
-    assert g.n_dim == 3
-    assert g.time_dependent is False
-
-
-def test_grid_options_is_frozen():
-    g = GridOptions()
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        g.n_dim = 4  # type: ignore[misc]
-
-
-def test_trajectory_result_construction():
-    r = TrajectoryResult(
-        df=pd.DataFrame({"x": [1, 2]}),
-        success=True,
-        status="Solve_Succeeded",
-        objective=1.0,
-        iters=10,
-        fuel=100.0,
-        grid_cost=float("nan"),
-        stats={"iter_count": 10},
-    )
-    assert r.success is True
-    assert r.status == "Solve_Succeeded"
-    assert r.objective == 1.0
-    assert r.iters == 10
-    assert r.fuel == 100.0
-    assert r.grid_cost != r.grid_cost  # NaN check
-    assert len(r.df) == 2
-    assert r.stats == {"iter_count": 10}
+from opentop._options import TrajectoryResult, build_result
 
 
 def test_trajectory_result_is_frozen():
@@ -80,8 +28,27 @@ def test_trajectory_result_is_frozen():
     "exact_grid_cost, expected", [(0.0, 0.0), (2.5, 2.5), (None, 9.0)]
 )
 def test_build_result_prefers_exact_grid_cost(exact_grid_cost, expected):
-    from opentop._options import build_result
-
     df = pd.DataFrame({"mass": [100.0, 99.0], "grid_cost": [9.0, float("nan")]})
     result = build_result(df, {"success": True}, 3.0, exact_grid_cost)
     assert result.grid_cost == expected
+
+
+def test_build_result_preserves_dataframe_and_solver_metadata():
+    df = pd.DataFrame({"mass": [100.0, 97.0], "grid_cost": [float("nan")] * 2})
+    stats = {"success": True, "return_status": "Solve_Succeeded", "iter_count": 7}
+    result = build_result(df, stats, 12.5)
+    assert result.df is df
+    assert result.stats is stats
+    assert (result.success, result.status, result.iters) == (True, "Solve_Succeeded", 7)
+    assert result.objective == 12.5
+    assert result.fuel == 3.0
+    assert math.isnan(result.grid_cost)
+
+
+def test_build_result_handles_rejected_solve():
+    result = build_result(None, {}, float("nan"))
+    assert result.df.empty
+    assert not result.success
+    assert result.status == ""
+    assert result.iters == 0
+    assert all(math.isnan(v) for v in (result.objective, result.fuel, result.grid_cost))

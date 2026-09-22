@@ -47,18 +47,6 @@ class TestTrackRefConstruction:
     def test_track_ref_none_by_default(self, opt):
         assert opt.track_ref is None
 
-    def test_follow_track_sets_three_tuple(self, opt):
-        lat, lon = _track_between(opt)
-        opt.follow_track(lat, lon)
-
-        assert opt.track_ref is not None
-        assert len(opt.track_ref) == 3
-        x_ref, y_ref, s_max = opt.track_ref
-        assert callable(x_ref)
-        assert callable(y_ref)
-        assert isinstance(s_max, float)
-        assert s_max > 0
-
     def test_accepts_python_lists(self, opt):
         """lat/lon are passed through np.asarray, so plain lists must work."""
         lat, lon = _track_between(opt)

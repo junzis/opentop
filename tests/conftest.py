@@ -1,5 +1,7 @@
 """Shared fixtures for opentop tests."""
 
+import importlib
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -22,3 +24,11 @@ def short_flight():
 @pytest.fixture(scope="session")
 def medium_flight():
     return {"origin": "EHAM", "destination": "LGAV", "m0": 0.85}
+
+
+@pytest.fixture(scope="module")
+def traffic_data():
+    # Missing optional packages may skip; broken installed packages must fail.
+    if importlib.util.find_spec("traffic") is None:
+        pytest.skip("traffic is not installed")
+    return importlib.import_module("traffic.data")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +11,13 @@ import pytest
 import numpy as np
 import pandas as pd
 from opentop import replay
+
+
+@pytest.fixture(autouse=True)
+def require_fastmeteo():
+    if importlib.util.find_spec("fastmeteo") is None:
+        pytest.skip("fastmeteo is not installed")
+    importlib.import_module("fastmeteo")
 
 
 def _fake_flight_df():
@@ -45,7 +54,6 @@ def _fake_meteo_df(n=100):
 
 
 def test_build_meteo_and_wind_returns_two_dataframes():
-    pytest.importorskip("fastmeteo")
     fake_era5 = MagicMock()
     fake_era5.interpolate.return_value = _fake_meteo_df()
 
@@ -65,7 +73,6 @@ def test_build_meteo_and_wind_returns_two_dataframes():
 
 
 def test_build_meteo_and_wind_rejects_uninterpolated_era5_grid():
-    pytest.importorskip("fastmeteo")
     fake_era5 = MagicMock()
     grid_without_era5_fields = _fake_flight_df().assign(
         longitude_360=lambda d: d.longitude % 360

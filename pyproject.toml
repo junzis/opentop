@@ -74,6 +74,8 @@ known-first-party = ["numpy", "pandas", "pyproj"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Keep module-scoped solver fixtures on one worker.
+addopts = "--dist=loadfile"
 filterwarnings = [
     "ignore:.*Wave drag is experimental\\.:UserWarning:openap\\.drag",
     "ignore:ast\\.Num is deprecated.*:DeprecationWarning:astor\\.op_util",

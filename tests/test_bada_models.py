@@ -18,9 +18,11 @@ BADA4_PATH = os.environ.get(
 )
 
 
-pytestmark = pytest.mark.skipif(
-    not os.path.exists(BADA3_PATH) or not os.path.exists(BADA4_PATH),
-    reason="BADA data paths are not available",
+requires_bada3 = pytest.mark.skipif(
+    not os.path.exists(BADA3_PATH), reason="BADA3 data unavailable"
+)
+requires_bada4 = pytest.mark.skipif(
+    not os.path.exists(BADA4_PATH), reason="BADA4 data unavailable"
 )
 
 
@@ -38,6 +40,7 @@ def test_build_native_performance_models():
     assert hasattr(bundle.fuelflow, "enroute")
 
 
+@requires_bada3
 def test_build_bada3_performance_models():
     bundle = build_performance_models(
         "A320",
@@ -53,6 +56,7 @@ def test_build_bada3_performance_models():
     assert hasattr(bundle.fuelflow, "enroute")
 
 
+@requires_bada4
 def test_build_bada4_performance_models():
     bundle = build_performance_models(
         "A320-214",
@@ -68,6 +72,7 @@ def test_build_bada4_performance_models():
     assert hasattr(bundle.fuelflow, "enroute")
 
 
+@requires_bada4
 def test_bada4_domain_guard_constrains_positive_fuel_flow():
     opt = top.Cruise(
         "A320-214",
@@ -83,6 +88,7 @@ def test_bada4_domain_guard_constrains_positive_fuel_flow():
     assert opt._opti.g.shape == (1, 1)
 
 
+@requires_bada4
 def test_bada4_complete_flight_uses_clean_mach_domain():
     opt = top.CompleteFlight(
         "A320-214",
@@ -99,6 +105,7 @@ def test_bada4_complete_flight_uses_clean_mach_domain():
     assert opt.u_lb[0] == 0.3
 
 
+@requires_bada4
 def test_bada4_complete_flight_tightens_cruise_vertical_rate_domain():
     bada4_opt = top.CompleteFlight(
         "A320-214",
@@ -114,6 +121,7 @@ def test_bada4_complete_flight_tightens_cruise_vertical_rate_domain():
     assert openap_opt._cruise_vertical_rate_limit() == pytest.approx(500 * fpm)
 
 
+@requires_bada4
 def test_bada4_complete_flight_uses_procedural_cruise_speed_domain():
     bada4_opt = top.CompleteFlight(
         "A320-214",
@@ -150,23 +158,10 @@ def test_bada_model_requires_bada_path():
         )
 
 
-def test_cruise_constructor_accepts_bada3_model():
-    opt = top.Cruise(
-        "A320",
-        "EHAM",
-        "EDDF",
-        0.85,
-        performance_model="bada3",
-        bada_path=BADA3_PATH,
-    )
-
-    assert opt.performance_model == "bada3"
-    assert hasattr(opt.fuelflow, "enroute")
-
-
 @pytest.mark.parametrize(
     "phase_cls", [top.Cruise, top.CompleteFlight, top.Climb, top.Descent]
 )
+@requires_bada3
 def test_phase_constructors_accept_bada3_model(phase_cls):
     opt = phase_cls(
         "A320",
@@ -185,8 +180,8 @@ def test_phase_constructors_accept_bada3_model(phase_cls):
 @pytest.mark.parametrize(
     ("actype", "performance_model", "bada_path"),
     [
-        ("A320", "bada3", BADA3_PATH),
-        ("A320-214", "bada4", BADA4_PATH),
+        pytest.param("A320", "bada3", BADA3_PATH, marks=requires_bada3),
+        pytest.param("A320-214", "bada4", BADA4_PATH, marks=requires_bada4),
     ],
 )
 def test_cruise_fuel_optimization_with_bada_model(actype, performance_model, bada_path):
@@ -204,6 +199,7 @@ def test_cruise_fuel_optimization_with_bada_model(actype, performance_model, bad
     opt.polydeg = 3
 
     df = opt.trajectory(objective="fuel", return_failed=True)
+    assert opt.success, opt.stats
     assert df is not None
     df = cast(pd.DataFrame, df)
 
