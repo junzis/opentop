@@ -116,6 +116,12 @@ opt.fix_track_angle()
 flight = opt.trajectory()
 ```
 
+To hold the cruise at a specific Mach number instead, pass `mach_value`:
+
+```python
+flight = opentop.Cruise("A320", "EHAM", "LGAV", m0=0.85, mach_value=0.78).trajectory()
+```
+
 ### Multiple-aircraft separation optimization
 
 `MultiAircraft` formulates several cruise trajectories in one CasADi Opti

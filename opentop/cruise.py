@@ -37,6 +37,7 @@ class Cruise(Base):
         h_min: float | None = None,
         h_max: float | None = None,
         payload: float | None = None,
+        mach_value: float | None = None,
     ) -> None:
         super().__init__(
             actype,
@@ -58,6 +59,7 @@ class Cruise(Base):
         self.h_min = h_min
         self.h_max = h_max
         self.track_ref = None
+        self.mach_value = mach_value
 
     def fix_mach_number(self):
         """Constrain Mach number to be constant during cruise."""
@@ -254,7 +256,11 @@ class Cruise(Base):
                 )  # type: ignore[arg-type]
             )
 
-        if self.fix_mach:
+        # Pin Mach to a given value (mach_value) or keep it constant (fix_mach)
+        if self.mach_value is not None:
+            for k in range(self.nodes + 1):
+                opti.subject_to(U[k][0] == self.mach_value)
+        elif self.fix_mach:
             for k in range(self.nodes):
                 opti.subject_to(U[k + 1][0] == U[k][0])
 

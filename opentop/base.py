@@ -151,6 +151,7 @@ class Base:
         self.debug = False
         self._last_solution = None
         self.objective_value: float | None = None
+        self.grid_cost_value: float | None = None
         self.setup()
 
     def _mass_min(self, payload: float | None) -> float:
@@ -451,6 +452,27 @@ class Base:
             {"allow_free": True},
         )
 
+        self.func_grid_cost = None
+        if kwargs.get("interpolant") is not None:
+            grid_L = _objectives.obj_grid_cost(
+                self.x,
+                self.u,
+                interval_dt,
+                proj=self.proj,
+                interpolant=kwargs["interpolant"],
+                n_dim=kwargs.get("n_dim"),
+                time_dependent=kwargs.get("time_dependent", True),
+                symbolic=True,
+            )
+            self.func_grid_cost = ca.Function(
+                f"grid_{function_name}",
+                [self.x, self.u, interval_dt],
+                [grid_L],
+                ["x", "u", "dt"],
+                ["L"],
+                {"allow_free": True},
+            )
+
     def _build_opti(self, objective, ts_final_guess, **kwargs):
         """Build CasADi Opti problem with direct collocation structure.
 
@@ -553,6 +575,9 @@ class Base:
             function_name=f"dynamics_{safe_prefix}",
             **model_kwargs,
         )
+        # A subclass may override init_model without building the grid probe
+        # (see tests/test_continuous_controls.py), so read it defensively.
+        grid_cost_fn = getattr(self, "func_grid_cost", None)
 
         C, D, B = self.collocation_coeff()
         nstates = self.x.shape[0]
@@ -562,6 +587,7 @@ class Base:
         U = []  # Shared boundary controls (length: nodes + 1)
         roots = ca.collocation_points(self.polydeg, "legendre")
         J = 0  # Objective accumulator
+        J_grid = 0  # Grid-cost accumulator, same quadrature, never rescaled
 
         state_guess = np.array(self.x_guess, dtype=float, copy=True)
         if kwargs.get("initial_guess") is None:
@@ -629,6 +655,8 @@ class Base:
 
                 Xk_end = Xk_end + D[j] * Xc[j - 1]
                 J = J + B[j] * qj
+                if grid_cost_fn is not None:
+                    J_grid = J_grid + B[j] * grid_cost_fn(Xc[j - 1], Uc, interval_dt)
 
             # State at end of interval
             Xk = self._opti.variable(nstates)
@@ -672,6 +700,9 @@ class Base:
                 self._objective_rescale = abs(f0)
         objective_raw = J
         objective_scaled = J / self._objective_rescale
+        # Never divided by _objective_rescale: J_grid is a physical integral of
+        # the grid field, not the quantity handed to IPOPT.
+        self._grid_cost_expr = J_grid if grid_cost_fn is not None else None
 
         if minimize:
             self._opti.minimize(objective_scaled)
@@ -690,6 +721,7 @@ class Base:
             ),
             objective_raw=objective_raw,
             objective_scaled=objective_scaled,
+            grid_cost_raw=self._grid_cost_expr,
             objective_scale=self._objective_rescale,
             objective_kwargs=dict(kwargs),
             projection_center=getattr(self, "_projection_center", None),
@@ -837,7 +869,10 @@ class Base:
         self._last_solution = sol
         # Undo auto_rescale_objective so callers always see the physical value.
         self.objective_value = float(sol.value(self._opti.f)) * self._objective_rescale
-
+        grid_expr = getattr(self, "_grid_cost_expr", None)
+        self.grid_cost_value = (
+            None if grid_expr is None else float(sol.value(grid_expr))
+        )
         ts_final_val = float(sol.value(self.ts_final))
         x_opt = sol.value(ca.horzcat(*X))
         u_opt = sol.value(ca.horzcat(*U))
@@ -1063,7 +1098,7 @@ class Base:
             if self.objective_value is not None
             else float("nan")
         )
-        return build_result(df, stats, obj)
+        return build_result(df, stats, obj, self.grid_cost_value)
 
     def multi_start_trajectory(
         self,

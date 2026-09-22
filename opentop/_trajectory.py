@@ -95,8 +95,11 @@ def to_dataframe(
     # quadrature and disagree with the physical fuel burn.
     fuel_cost = np.append(-np.diff(mass), np.nan)
 
-    # Grid cost has no state-based equivalent; integrate left-endpoint
-    # over the N intervals and pad the terminal row with NaN.
+    # Grid cost has no state-based equivalent; integrate left-endpoint over the
+    # N intervals and pad the terminal row with NaN. This column is a per-node
+    # diagnostic and its sum is NOT the minimised objective -- the NLP uses the
+    # Legendre quadrature at the collocation points. Use
+    # Base.grid_cost_value / TrajectoryResult.grid_cost for that.
     if interpolant is not None:
         grid_cost_seg = np.asarray(
             _objectives.obj_grid_cost(
