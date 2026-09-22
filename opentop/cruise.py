@@ -11,6 +11,7 @@ from openap.aero import fpm, ft, kts
 import numpy as np
 import pandas as pd
 
+from ._track import constrain_track, project_track, validate_track
 from ._transcription import AircraftTranscription
 from ._types import LatLon
 from .base import Base
@@ -59,6 +60,8 @@ class Cruise(Base):
         self.h_min = h_min
         self.h_max = h_max
         self.track_ref = None
+        self._track_coordinates = None
+        self._track_tolerance_m = 1000.0
         self.mach_value = mach_value
 
     def fix_mach_number(self):
@@ -69,30 +72,32 @@ class Cruise(Base):
         """Constrain altitude to be constant (no climb/descent)."""
         self.fix_alt = True
 
-    def follow_track(self, lat: Any, lon: Any) -> None:
-        """Constrain the lateral ground track to follow a given (lat, lon) trace."""
-        lat = np.asarray(lat, dtype=float)
-        lon = np.asarray(lon, dtype=float)
+    def follow_track(self, lat: Any, lon: Any, *, tolerance_m: float = 1000.0) -> None:
+        """Constrain the ground track to a cubic spline through recorded points.
 
-        d0 = float(oc.geo.distance(lat[0], lon[0], self.lat1, self.lon1))
-        dn = float(oc.geo.distance(lat[-1], lon[-1], self.lat2, self.lon2))
-        if max(d0, dn) > 1000:
-            raise ValueError(
-                f"track endpoints do not match origin/destination "
-                f"(off by {d0 / 1000:.1f} km / {dn / 1000:.1f} km); "
-                f"the boundary conditions pin both ends of the trajectory."
-            )
-
-        x, y = self.proj(lon, lat)
-        s = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(x), np.diff(y)))])
-        self.track_ref = (
-            ca.interpolant("x_ref", "bspline", [s.tolist()], x.tolist()),
-            ca.interpolant("y_ref", "bspline", [s.tolist()], y.tolist()),
-            float(s[-1]),
+        Coordinates must be matching finite 1D arrays with at least four points
+        and no consecutive duplicates. Endpoints within 1 km are snapped to the
+        flight origin/destination. Boundary nodes lie on the spline; interior
+        collocation and quarter-interval samples may deviate by ``tolerance_m``
+        (default 1,000 m). This is a sampled constraint, not a continuous guarantee;
+        use more nodes for sharply curved tracks. Turn-rate limits remain active.
+        """
+        if not np.isfinite(tolerance_m) or tolerance_m <= 0:
+            raise ValueError("track tolerance_m must be finite and positive")
+        if self.fix_track:
+            raise ValueError("follow_track cannot be combined with fix_track_angle")
+        coordinates = validate_track(
+            lat, lon, (self.lat1, self.lon1), (self.lat2, self.lon2)
         )
+        track_ref = project_track(*coordinates, self.proj)
+        self._track_coordinates = coordinates
+        self.track_ref = track_ref
+        self._track_tolerance_m = float(tolerance_m)
 
     def fix_track_angle(self):
         """Constrain heading to be constant (great circle track)."""
+        if self._track_coordinates is not None:
+            raise ValueError("fix_track_angle cannot be combined with follow_track")
         self.fix_track = True
 
     def allow_cruise_descent(self):
@@ -102,6 +107,10 @@ class Cruise(Base):
     def init_conditions(self, **kwargs: Any) -> None:
         """Initialize direct collocation bounds and guesses."""
 
+        if self._track_coordinates is not None:
+            # MultiAircraft temporarily changes the optimizer projection.
+            self.track_ref = project_track(*self._track_coordinates, self.proj)
+
         # Convert lat/lon to Cartesian coordinates.
         xp_0, yp_0 = self.proj(self.lon1, self.lat1)
         xp_f, yp_f = self.proj(self.lon2, self.lat2)
@@ -110,8 +119,24 @@ class Cruise(Base):
             waypoints=kwargs.get("waypoints"),
         )
 
+        if self.track_ref is not None:
+            x_ref, y_ref, length = self.track_ref
+            samples = np.linspace(0, length, max(1000, self.nodes * 10))
+            track_x = np.asarray(x_ref(samples)).ravel()
+            track_y = np.asarray(y_ref(samples)).ravel()
+            margin = kwargs.get("route_margin_m", 10_000)
+            x_min, x_max = (
+                min(x_min, track_x.min() - margin),
+                max(x_max, track_x.max() + margin),
+            )
+            y_min, y_max = (
+                min(y_min, track_y.min() - margin),
+                max(y_max, track_y.max() + margin),
+            )
+
         ts_min = 0
-        ts_max = max(5, self.range / 1000 / 500) * 3600
+        route_length = self.track_ref[2] if self.track_ref else self.range
+        ts_max = max(5, route_length / 1000 / 500) * 3600
 
         h_max = kwargs.get(
             "h_max",
@@ -149,6 +174,20 @@ class Cruise(Base):
         self.u_lb = [0.5, -500 * fpm, psi - pi / 2]
         self.u_ub = [self.mach_max, 500 * fpm, psi + pi / 2]
 
+        if self.track_ref is not None:
+            # Permit headings along curved routes, including a wrap through north.
+            headings = np.unwrap(np.arctan2(np.diff(track_x), np.diff(track_y)))
+            headings += 2 * pi * round((psi - headings[0]) / (2 * pi))
+            self.u_0_lb[2], self.u_0_ub[2] = headings[0] - pi / 4, headings[0] + pi / 4
+            self.u_f_lb[2], self.u_f_ub[2] = (
+                headings[-1] - pi / 4,
+                headings[-1] + pi / 4,
+            )
+            self.u_lb[2], self.u_ub[2] = (
+                headings.min() - pi / 4,
+                headings.max() + pi / 4,
+            )
+
         # Initial guess - states
         initial_guess = kwargs.get("initial_guess", None)
         self.x_guess = (
@@ -156,6 +195,12 @@ class Cruise(Base):
             if initial_guess is not None
             else self.initial_guess()
         )
+
+        if self.track_ref is not None and initial_guess is None:
+            x_ref, y_ref, length = self.track_ref
+            progress = np.linspace(0, length, self.nodes + 1)
+            self.x_guess[:, 0] = np.asarray(x_ref(progress)).ravel()
+            self.x_guess[:, 1] = np.asarray(y_ref(progress)).ravel()
 
         # Initial guess - controls
         self.u_guess = [0.7, 0, psi]
@@ -191,7 +236,7 @@ class Cruise(Base):
             "n_dim": n_dim,
             "time_dependent": time_dependent,
             "auto_rescale_objective": auto_rescale_objective,
-            "exact_hessian": exact_hessian,
+            "exact_hessian": exact_hessian or self._track_coordinates is not None,
             "waypoints": waypoints,
             "waypoint_tolerance_m": waypoint_tolerance_m,
             "waypoint_node_indices": waypoint_node_indices,
@@ -214,12 +259,26 @@ class Cruise(Base):
         transcription = self._add_transcription(
             opti,
             objective,
-            ts_final_guess=self.range / 200,
+            ts_final_guess=(self.track_ref[2] if self.track_ref else self.range) / 200,
             minimize=minimize,
             name_prefix=name_prefix,
             **kwargs,
         )
         X, U = transcription.X, transcription.U
+        if self.track_ref is not None and initial_guess is None:
+            x_ref, y_ref, length = self.track_ref
+            progress = np.linspace(0, length, self.nodes + 1)
+            step = min(1.0, length / 1000)
+            before, after = (
+                np.maximum(0, progress - step),
+                np.minimum(length, progress + step),
+            )
+            dx = np.asarray(x_ref(after) - x_ref(before)).ravel()
+            dy = np.asarray(y_ref(after) - y_ref(before)).ravel()
+            headings = np.unwrap(np.arctan2(dx, dy))
+            headings += 2 * pi * round((self.u_guess[2] - headings[0]) / (2 * pi))
+            for control, heading in zip(U, headings):
+                opti.set_initial(control[2], heading)
 
         # Nonlinear performance constraints need checks inside each interval.
         for state, control in transcription.path_points():
@@ -235,15 +294,12 @@ class Cruise(Base):
                 opti.bounded(-1, X[k + 1][4] - X[k][4] - self._interval_dt(k), 1)  # type: ignore[arg-type]
             )
 
-        # Limit turn rate independently of interval duration. Skipped when a
-        # reference track is followed: the lateral path is externally fixed, so
-        # the recorded heading changes must be reproduced rather than smoothed.
-        if self.track_ref is None:
-            for k in range(self.nodes):
-                turn_rate = self._control_change_rate(U, k, 2)
-                opti.subject_to(
-                    opti.bounded(-self.MAX_TURN_RATE, turn_rate, self.MAX_TURN_RATE)  # type: ignore[arg-type]
-                )
+        # A prescribed track must still satisfy the aircraft turn-rate limit.
+        for k in range(self.nodes):
+            turn_rate = self._control_change_rate(U, k, 2)
+            opti.subject_to(
+                opti.bounded(-self.MAX_TURN_RATE, turn_rate, self.MAX_TURN_RATE)  # type: ignore[arg-type]
+            )
 
         # Limit vertical acceleration independently of interval duration
         for k in range(self.nodes):
@@ -272,20 +328,8 @@ class Cruise(Base):
             for k in range(self.nodes):
                 opti.subject_to(U[k + 1][2] == U[k][2])
 
-        # Pin the lateral ground track to a recorded path (follow_track). Each
-        # interior node is fixed to the arc-length-parametrized reference curve;
-        # the monotone arc-length variable keeps nodes ordered along the path.
         if self.track_ref is not None:
-            x_ref, y_ref, s_max = self.track_ref
-            s = opti.variable(self.nodes + 1)
-            for k in range(self.nodes + 1):
-                opti.subject_to(opti.bounded(0, s[k], s_max))  # type: ignore[arg-type]
-                opti.set_initial(s[k], s_max * k / self.nodes)
-            for k in range(1, self.nodes):
-                opti.subject_to(X[k][0] == x_ref(s[k]))
-                opti.subject_to(X[k][1] == y_ref(s[k]))
-            for k in range(self.nodes):
-                opti.subject_to(s[k + 1] >= s[k])
+            constrain_track(transcription, self.track_ref, self._track_tolerance_m)
 
         if not self.allow_descent:
             for k in range(self.nodes + 1):
@@ -367,7 +411,7 @@ class Cruise(Base):
             "n_dim": n_dim,
             "time_dependent": time_dependent,
             "auto_rescale_objective": auto_rescale_objective,
-            "exact_hessian": exact_hessian,
+            "exact_hessian": exact_hessian or self._track_coordinates is not None,
             "waypoints": waypoints,
             "waypoint_tolerance_m": waypoint_tolerance_m,
             "waypoint_node_indices": waypoint_node_indices,

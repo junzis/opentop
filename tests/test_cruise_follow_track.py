@@ -1,17 +1,13 @@
-"""Tests for Cruise.follow_track — the lateral ground-track constraint.
+"""Validation and numerical checks for prescribed cruise ground tracks."""
 
-follow_track(lat, lon) stores a reference path as
-``self.track_ref = (x_ref, y_ref, s_max)`` where x_ref/y_ref are CasADi
-arc-length interpolants in projected (Cartesian) space and s_max is the total
-path length. trajectory() then pins each interior node to that path and drops
-the default smooth-heading constraint.
-"""
-
+import casadi as ca
 import openap.casadi as oc
 import pytest
 
 import numpy as np
 import opentop as top
+import pandas as pd
+from opentop._options import TrajectoryResult
 
 # ---- helpers ----------------------------------------------------------------
 
@@ -96,12 +92,11 @@ class TestTrackRefConstruction:
         assert float(y_ref(s_max)) == pytest.approx(yf, abs=1.0)
 
     def test_rejects_duplicate_consecutive_points(self, opt):
-        """A zero-length segment makes the arc-length grid non-increasing, which
-        CasADi's bspline interpolant rejects."""
+        """Reject duplicate points before passing the grid to CasADi."""
         lat, lon = _track_between(opt)
         lat = np.insert(lat, 1, lat[0])  # duplicate the first point
         lon = np.insert(lon, 1, lon[0])
-        with pytest.raises(RuntimeError, match="is_increasing"):
+        with pytest.raises(ValueError, match="duplicate consecutive"):
             opt.follow_track(lat, lon)
 
     def test_interpolants_reproduce_projected_endpoints(self, opt):
@@ -148,27 +143,220 @@ class TestEndpointValidation:
 
 
 class TestFollowTrackTrajectory:
-    def test_trajectory_follows_bowed_track(self, opt):
-        """Solve with a bowed reference path and confirm the solution's lateral
-        positions stay on that path rather than on the great circle."""
-        lat, lon = _track_between(opt, n=25, bow_deg=0.15)
-        opt.follow_track(lat, lon)
+    @pytest.mark.parametrize("tolerance_m", [100.0, 1000.0])
+    def test_trajectory_follows_bowed_track(self, opt, monkeypatch, tolerance_m):
+        lat, lon = _track_between(opt, n=25, bow_deg=0.3)
+        if tolerance_m < 1000:
+            opt.setup(nodes=40, max_iter=600)
+        opt.follow_track(lat, lon, tolerance_m=tolerance_m)
+        captured = []
+        original = opt._add_formulation
 
+        def capture(*args, **kwargs):
+            transcription = original(*args, **kwargs)
+            captured.append(transcription)
+            return transcription
+
+        monkeypatch.setattr(opt, "_add_formulation", capture)
         df = opt.trajectory(objective="fuel")
-        assert df is not None and len(df) > 0
+        assert opt.success, opt.stats["return_status"]
+        assert isinstance(df, pd.DataFrame) and len(df) > 0
+        transcription = captured[0]
+        solution = opt._last_solution
+        x_ref, y_ref, length = opt.track_ref
+        # A dense reference grid bounds nearest-point measurement error to ~2 m.
+        reference_s = np.linspace(0, length, int(length / 2) + 1)
+        reference = np.column_stack(
+            [
+                np.asarray(x_ref(reference_s)).ravel(),
+                np.asarray(y_ref(reference_s)).ravel(),
+            ]
+        )
+        from scipy.spatial import KDTree
 
-        x_ref, y_ref, s_max = opt.track_ref
-        ref_s = np.linspace(0.0, s_max, 400)
-        ref_x = np.array([float(x_ref(s)) for s in ref_s])
-        ref_y = np.array([float(y_ref(s)) for s in ref_s])
-
-        sol_x, sol_y = opt.proj(df.longitude.to_numpy(), df.latitude.to_numpy())
-
-        # Every solved node must sit on (very near) the reference polyline.
-        for xk, yk in zip(np.atleast_1d(sol_x), np.atleast_1d(sol_y)):
-            dist = np.min(np.hypot(ref_x - xk, ref_y - yk))
-            assert dist < 5_000, f"node {dist / 1000:.1f} km off the reference track"
-
-        # The bow must actually show up: the great circle would keep heading
-        # nearly constant, so a followed bow means a non-trivial heading swing.
+        tree = KDTree(reference)
+        dense = []
+        for k in range(opt.nodes):
+            for tau in np.linspace(0, 1, 21):
+                dense.append(solution.value(transcription.state_at(k, float(tau)))[:2])
+        distances, _ = tree.query(np.asarray(dense))
+        assert distances.max() <= tolerance_m + 2.0
+        boundary_distances, _ = tree.query(df[["x", "y"]].to_numpy())
+        assert boundary_distances.max() < 2.0
+        rates = [
+            abs(float(solution.value(opt._control_change_rate(transcription.U, k, 2))))
+            for k in range(opt.nodes)
+        ]
+        assert max(rates) <= opt.MAX_TURN_RATE + 1e-7
         assert df.heading.max() - df.heading.min() > 2.0
+
+
+def test_track_with_fixed_mach_and_grid_objective(opt):
+    lat, lon = _track_between(opt, n=15, bow_deg=0.15)
+    opt.follow_track(lat, lon)
+    opt.mach_value = 0.76
+    # A constant linear grid has a known integral and no expensive spline setup.
+    grid = ca.interpolant(
+        "track_test_grid",
+        "linear",
+        [[0.0, 15.0], [45.0, 60.0], [0.0, 15000.0]],
+        [1.0] * 8,
+    )
+    result = opt.trajectory(
+        objective="grid_cost", interpolant=grid, time_dependent=True, result_object=True
+    )
+    assert isinstance(result, TrajectoryResult)
+    assert result.success, result.status
+    np.testing.assert_allclose(result.df.mach, 0.76, atol=1e-6)
+    assert result.grid_cost == pytest.approx(result.objective, rel=1e-6)
+    assert result.grid_cost == pytest.approx(result.df.ts.iloc[-1], rel=1e-6)
+
+
+@pytest.mark.parametrize(
+    "lat, lon",
+    [
+        ([], []),
+        ([1, 2, 3], [1, 2, 3]),
+        ([[1, 2], [3, 4]], [[1, 2], [3, 4]]),
+        ([1, 2, 3, 4], [1, 2, 3]),
+        ([1, np.nan, 3, 4], [1, 2, 3, 4]),
+        ([1, 2, 3, 4], [1, np.inf, 3, 4]),
+        ([1, 91, 3, 4], [1, 2, 3, 4]),
+        ([1, 2, 3, 4], [1, 181, 3, 4]),
+    ],
+)
+def test_invalid_track_coordinates(opt, lat, lon):
+    with pytest.raises(ValueError):
+        opt.follow_track(lat, lon)
+    assert opt.track_ref is None
+
+
+@pytest.mark.parametrize("tolerance", [0, -1, np.nan, np.inf])
+def test_invalid_tolerance(opt, tolerance):
+    lat, lon = _track_between(opt)
+    with pytest.raises(ValueError, match="tolerance_m"):
+        opt.follow_track(lat, lon, tolerance_m=tolerance)
+
+
+@pytest.mark.parametrize("track_first", [False, True])
+def test_fixed_heading_and_track_are_mutually_exclusive(opt, track_first):
+    lat, lon = _track_between(opt)
+    if track_first:
+        opt.follow_track(lat, lon)
+        with pytest.raises(ValueError, match="cannot be combined"):
+            opt.fix_track_angle()
+    else:
+        opt.fix_track_angle()
+        with pytest.raises(ValueError, match="cannot be combined"):
+            opt.follow_track(lat, lon)
+
+
+def test_track_rebuilds_in_fleet_projection_and_restores_on_next_solve(opt):
+    from opentop.fleet import _fleet_projection
+
+    lat, lon = _track_between(opt, bow_deg=0.3)
+    opt.follow_track(lat, lon)
+    original_xy = opt.proj(lon, lat)
+    flights = (top.FlightSpec("AC1", opt),)
+    with _fleet_projection(flights, (48.0, 12.0)):
+        opt._add_formulation(ca.Opti())
+        expected_x, expected_y = opt.proj(opt.lon1, opt.lat1)
+        x_ref, y_ref, _ = opt.track_ref
+        assert float(x_ref(0)) == pytest.approx(expected_x, abs=1e-5)
+        assert float(y_ref(0)) == pytest.approx(expected_y, abs=1e-5)
+        assert abs(expected_x - original_xy[0][0]) > 1000
+    opt.init_conditions()
+    x_ref, y_ref, _ = opt.track_ref
+    assert float(x_ref(0)) == pytest.approx(original_xy[0][0], abs=1e-5)
+    assert float(y_ref(0)) == pytest.approx(original_xy[1][0], abs=1e-5)
+
+
+def test_track_bounds_and_default_guess_include_large_detour(opt):
+    lat, lon = _track_between(opt, bow_deg=2.0)
+    opt.follow_track(lat, lon)
+    opt.init_conditions()
+    x_ref, y_ref, length = opt.track_ref
+    samples = np.linspace(0, length, 100)
+    x, y = np.asarray(x_ref(samples)), np.asarray(y_ref(samples))
+    assert x.min() >= opt.x_lb[0] and x.max() <= opt.x_ub[0]
+    assert y.min() >= opt.x_lb[1] and y.max() <= opt.x_ub[1]
+    nodes = np.linspace(0, length, opt.nodes + 1)
+    np.testing.assert_allclose(opt.x_guess[:, 0], np.asarray(x_ref(nodes)).ravel())
+    np.testing.assert_allclose(opt.x_guess[:, 1], np.asarray(y_ref(nodes)).ravel())
+
+
+def test_endpoint_snapping_does_not_mutate_input(opt):
+    lat, lon = _track_between(opt)
+    lat[0] += 0.001
+    original_lat = lat.copy()
+    opt.follow_track(lat, lon)
+    np.testing.assert_array_equal(lat, original_lat)
+    x_ref, y_ref, _ = opt.track_ref
+    expected_x, expected_y = opt.proj(opt.lon1, opt.lat1)
+    assert float(x_ref(0)) == pytest.approx(expected_x, abs=1e-5)
+    assert float(y_ref(0)) == pytest.approx(expected_y, abs=1e-5)
+
+
+def test_interior_constraints_reject_an_off_track_arc():
+    from types import SimpleNamespace
+
+    from opentop._track import constrain_track
+
+    problem = ca.Opti()
+    amplitude = problem.variable()
+    problem.set_initial(amplitude, 5000.0)
+    # Endpoints lie on the straight reference, but the interior bows 5 km away.
+    track = (
+        ca.interpolant("straight_x", "linear", [[0.0, 10000.0]], [0.0, 10000.0]),
+        ca.interpolant("straight_y", "linear", [[0.0, 10000.0]], [0.0, 0.0]),
+        10000.0,
+    )
+    transcription = SimpleNamespace(
+        opti=problem,
+        X=[ca.vertcat(0, 0), ca.vertcat(10000, 0)],
+        collocation_roots=(0.2, 0.5, 0.8),
+        state_at=lambda k, tau: ca.vertcat(
+            10000 * tau, 4 * tau * (1 - tau) * amplitude
+        ),
+    )
+    constrain_track(transcription, track, tolerance_m=1000.0)
+    constraint = np.asarray(problem.debug.value(problem.g, problem.initial()))
+    upper = np.asarray(problem.debug.value(problem.ubg, problem.initial()))
+    assert np.max(constraint - upper) > 1.0
+    problem.set_initial(amplitude, 0.0)
+    constraint = np.asarray(problem.debug.value(problem.g, problem.initial()))
+    lower = np.asarray(problem.debug.value(problem.lbg, problem.initial()))
+    assert np.all(constraint <= upper + 1e-8)
+    assert np.all(constraint >= lower - 1e-8)
+
+
+def test_track_with_wind(opt):
+    lat, lon = _track_between(opt, n=15, bow_deg=0.15)
+    opt.follow_track(lat, lon)
+    lon_g, lat_g, h_g, ts_g = np.meshgrid(
+        [0, 7, 15], [48, 52, 55], [1000, 7000, 12000], [0, 10000, 20000], indexing="ij"
+    )
+    opt.enable_wind(
+        pd.DataFrame(
+            {
+                "longitude": lon_g.ravel(),
+                "latitude": lat_g.ravel(),
+                "h": h_g.ravel(),
+                "ts": ts_g.ravel(),
+                "u": 10.0,
+                "v": 0.0,
+            }
+        )
+    )
+    result = opt.trajectory(result_object=True)
+    assert isinstance(result, TrajectoryResult)
+    assert result.success, result.status
+
+
+def test_follow_track_fleet_solve(opt):
+    lat, lon = _track_between(opt, n=15, bow_deg=0.15)
+    opt.follow_track(lat, lon)
+    result = top.MultiAircraft(
+        [top.FlightSpec("tracked", opt)], enforce_separation=False
+    ).trajectory()
+    assert result.success, result.stats
