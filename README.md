@@ -263,7 +263,7 @@ trajectory, candidates = optimizer.multi_start_trajectory(
 )
 ```
 
-Start 0 uses the canonical initial guess (your `initial_guess=` if provided, otherwise the default great-circle). Starts 1..N-1 are random perturbations of the canonical: sinusoidal lateral bulges (endpoints preserved) and constant altitude offsets.
+Start 0 uses your `initial_guess=` if provided, otherwise the default great-circle guess. Subsequent starts perturb your supplied guess, or start 0's returned trajectory if no guess was supplied: sinusoidal lateral bulges (endpoints preserved), constant altitude offsets, and optional additive Mach offsets. Set `mach_jitter=0.04`, for example, to draw offsets uniformly within ±0.04 Mach. It defaults to zero. A supplied guess needs a `mach` column when speed jitter is enabled; the optimizer clips the Mach guesses to each node's control bounds. These perturbations change only initialization, not the constraints or fuel model.
 
 Returned is a `(trajectory, candidates)` tuple. `trajectory` is the winning DataFrame (feasibility-first, then lowest objective). `candidates` is a best-first ordered list of dicts with per-start metadata (`objective`, `fuel`, `grid_cost`, `success`, `iters`, `perturbation`, `wall_time_s`, `trajectory`).
 

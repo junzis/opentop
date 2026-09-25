@@ -17,6 +17,7 @@ def _perturb_guess(
     lateral_km: float,
     altitude_ft: float,
     proj: Any,
+    mach_offset: float = 0.0,
 ) -> pd.DataFrame:
     """Perturb a canonical initial-guess DataFrame.
 
@@ -27,6 +28,7 @@ def _perturb_guess(
             bulge so origin and destination are unchanged. Sign chooses
             direction; magnitude gives peak deviation.
         altitude_ft: Constant altitude offset in feet applied to every row.
+        mach_offset: Additive shift to the Mach profile, if nonzero.
         proj: The optimizer's projection callable; signature
             (lon, lat) -> (xp, yp) and (xp, yp, inverse=True) -> (lon, lat).
 
@@ -35,6 +37,12 @@ def _perturb_guess(
         The input DataFrame is not modified.
     """
     out = df.copy()
+    if mach_offset != 0.0:
+        if "mach" not in df:
+            raise ValueError(
+                "Mach perturbations require an initial guess with a mach column"
+            )
+        out["mach"] = df["mach"] + mach_offset
     # Altitude: constant offset at every node.
     out["altitude"] = df["altitude"] + altitude_ft
 
@@ -107,7 +115,7 @@ def run_multi_start(
 
     Start 0 uses the user's ``initial_guess=`` (if given) or the
     optimizer's default great-circle guess. Starts 1..N-1 apply random
-    lateral and altitude perturbations to a canonical basis DataFrame:
+    lateral, altitude and optional Mach perturbations to a canonical basis DataFrame:
     if ``initial_guess=`` was supplied, that DataFrame is the basis;
     otherwise start 0's solved trajectory is the basis.
 
@@ -115,8 +123,13 @@ def run_multi_start(
         optimizer: the ``Base`` (or subclass) instance driving the solves.
         objective: Optimization objective, forwarded to ``trajectory()``.
         **kwargs: Multi-start controls (``n_starts``, ``lateral_jitter_km``,
-            ``altitude_jitter_ft``, ``seed``) plus any extra keyword arguments
-            forwarded to ``trajectory()``.
+            ``altitude_jitter_ft``, ``mach_jitter``, ``seed``) plus extra keyword
+            arguments forwarded to ``trajectory()``.
+
+    ``mach_jitter`` defaults to zero for backwards compatibility. A positive
+    value draws uniform additive Mach offsets within +/- that value. Supply
+    an initial guess with a ``mach`` column, or use start 0's solved trajectory.
+    Control guesses are clipped to each node's bounds by the optimizer.
 
     Returns:
         (trajectory, candidates):
@@ -138,6 +151,7 @@ def run_multi_start(
     n_starts = kwargs.pop("n_starts", 5)
     lateral_jitter_km = kwargs.pop("lateral_jitter_km", 100.0)
     altitude_jitter_ft = kwargs.pop("altitude_jitter_ft", 3000.0)
+    mach_jitter = kwargs.pop("mach_jitter", 0.0)
     seed = kwargs.pop("seed", None)
     trajectory_kwargs = dict(kwargs)
     # multi_start always returns DataFrames; strip the result_object flag if passed.
@@ -149,9 +163,17 @@ def run_multi_start(
     if seed is not None and (not isinstance(seed, int) or seed < 0):
         raise ValueError(f"seed must be a non-negative integer or None, got {seed!r}")
 
+    if not np.isfinite(mach_jitter) or mach_jitter < 0:
+        raise ValueError("mach_jitter must be finite and non-negative")
+    initial = trajectory_kwargs.get("initial_guess")
+    if mach_jitter and initial is not None and "mach" not in initial:
+        raise ValueError(
+            "Mach perturbations require an initial guess with a mach column"
+        )
+
     has_interpolant = trajectory_kwargs.get("interpolant") is not None
 
-    def _make_candidate(index, df, lat_km, alt_ft, wall_time_s):
+    def _make_candidate(index, df, lat_km, alt_ft, wall_time_s, mach_offset=0.0):
         stats = (
             optimizer._last_solution.stats()
             if hasattr(optimizer, "_last_solution")
@@ -161,6 +183,9 @@ def run_multi_start(
             float(df["grid_cost"].sum(skipna=True)) if has_interpolant else float("nan")
         )
         exact_grid_cost = getattr(optimizer, "grid_cost_value", None)
+        perturbation = {"lateral_km": float(lat_km), "altitude_ft": float(alt_ft)}
+        if mach_jitter:
+            perturbation["mach_offset"] = float(mach_offset)
         return {
             "start_index": index,
             "objective": float(getattr(optimizer, "objective_value", float("nan"))),
@@ -172,7 +197,7 @@ def run_multi_start(
             "success": bool(stats.get("success")),
             "return_status": str(stats.get("return_status", "")),
             "iters": int(stats.get("iter_count", 0)),
-            "perturbation": {"lateral_km": float(lat_km), "altitude_ft": float(alt_ft)},
+            "perturbation": perturbation,
             "wall_time_s": float(wall_time_s),
             "trajectory": df,
         }
@@ -196,15 +221,25 @@ def run_multi_start(
         for i in range(1, n_starts):
             lat_km = float(rng.uniform(-lateral_jitter_km, lateral_jitter_km))
             alt_ft = float(rng.uniform(-altitude_jitter_ft, altitude_jitter_ft))
+            # Avoid changing the established random sequence when speed jitter is off.
+            mach_offset = (
+                float(rng.uniform(-mach_jitter, mach_jitter)) if mach_jitter else 0.0
+            )
             perturbed = _perturb_guess(
-                canonical_df, lat_km, alt_ft, proj=optimizer.proj
+                canonical_df,
+                lat_km,
+                alt_ft,
+                proj=optimizer.proj,
+                mach_offset=mach_offset,
             )
             ts = time.perf_counter()
             df_i = optimizer.trajectory(
                 **{**trajectory_kwargs, "initial_guess": perturbed}
             )
             wall = time.perf_counter() - ts
-            candidates.append(_make_candidate(i, df_i, lat_km, alt_ft, wall))
+            candidates.append(
+                _make_candidate(i, df_i, lat_km, alt_ft, wall, mach_offset)
+            )
 
     candidates = _rank_candidates(candidates)
     # Costs describe the returned trajectory. Solver stats continue to describe

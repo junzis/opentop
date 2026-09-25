@@ -450,3 +450,79 @@ def test_perturbed_starts_use_supplied_guess(fake_optimizer):
             guess.altitude + candidate["perturbation"]["altitude_ft"],
         )
     assert (guess.altitude == 30000).all()
+
+
+class TestMultiStartMach:
+    @pytest.fixture
+    def _fast_optimizer(self):
+        opt = top.Cruise("A320", (52.362, 13.501), (52.560, 13.287), m0=0.85)
+        opt.setup(max_iter=500)
+        return opt
+
+    def test_mach_shift_preserves_states_and_input(self, proj):
+        df = _make_canonical_df()
+        df["mach"] = np.linspace(0.65, 0.8, len(df))
+        before = df.copy(deep=True)
+        shifted = _perturb_guess(df, 0, 0, proj, mach_offset=-0.03)
+        np.testing.assert_allclose(shifted.mach, df.mach - 0.03)
+        pd.testing.assert_frame_equal(
+            shifted.drop(columns="mach"), df.drop(columns="mach")
+        )
+        pd.testing.assert_frame_equal(df, before)
+
+    @pytest.mark.parametrize("jitter", [-0.01, float("nan"), float("inf")])
+    def test_invalid_jitter_rejected(self, _fast_optimizer, jitter):
+        with pytest.raises(ValueError, match="mach_jitter"):
+            _fast_optimizer.multi_start_trajectory(mach_jitter=jitter)
+
+    def test_missing_mach_rejected_before_solve(self, _fast_optimizer):
+        with pytest.raises(ValueError, match="mach column"):
+            _fast_optimizer.multi_start_trajectory(
+                initial_guess=_make_canonical_df(), mach_jitter=0.03
+            )
+
+    def test_mach_profile_reaches_solver_and_is_reproducible(
+        self, _fast_optimizer, monkeypatch
+    ):
+        opt = _fast_optimizer
+        initial = opt.trajectory(objective="fuel")
+        initial["mach"] = np.linspace(0.65, 0.8, len(initial))
+        guesses = []
+        solve = opt._solve
+
+        def capture(X, U, **kwargs):
+            guesses.append(
+                np.array(
+                    [float(opt._opti.debug.value(u[0], opt._opti.initial())) for u in U]
+                )
+            )
+            return solve(X, U, **kwargs)
+
+        monkeypatch.setattr(opt, "_solve", capture)
+        settings = dict(
+            initial_guess=initial,
+            n_starts=3,
+            seed=42,
+            lateral_jitter_km=0,
+            altitude_jitter_ft=0,
+            mach_jitter=0.04,
+        )
+        _, candidates = opt.multi_start_trajectory(**settings)
+        _, repeated = opt.multi_start_trajectory(**settings)
+        by_index = sorted(candidates, key=lambda c: c["start_index"])
+        assert [c["perturbation"] for c in by_index] == [
+            c["perturbation"] for c in sorted(repeated, key=lambda c: c["start_index"])
+        ]
+        for i, candidate in enumerate(by_index):
+            offset = candidate["perturbation"]["mach_offset"]
+            assert abs(offset) <= 0.04
+            lower = np.r_[
+                opt.u_0_lb[0], np.full(opt.nodes - 1, opt.u_lb[0]), opt.u_f_lb[0]
+            ]
+            upper = np.r_[
+                opt.u_0_ub[0], np.full(opt.nodes - 1, opt.u_ub[0]), opt.u_f_ub[0]
+            ]
+            expected = np.clip(initial.mach.to_numpy() + offset, lower, upper)
+            np.testing.assert_allclose(guesses[i], expected)
+            np.testing.assert_array_equal(guesses[i], guesses[i + 3])
+        assert not np.array_equal(guesses[0], guesses[1])

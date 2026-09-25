@@ -280,6 +280,7 @@ class Base:
         Args:
             flight: Existing trajectory to use as initial guess.
                 If None, uses straight-line interpolation at cruise altitude.
+                The NLP also uses an optional mach column to initialize controls.
 
         Returns:
             np.ndarray: Array of shape (nodes+1, 5) with columns
@@ -599,6 +600,19 @@ class Base:
                 state_guess[0, 4], state_guess[0, 4] + ts_final_guess, self.nodes + 1
             )
 
+        # A supplied Mach profile must reach the control variables, not just states.
+        initial_flight = kwargs.get("initial_guess")
+        mach_guess = None
+        if initial_flight is not None and "mach" in initial_flight:
+            mach_guess = np.asarray(initial_flight["mach"], dtype=float)
+            if (
+                mach_guess.shape != (self.nodes + 1,)
+                or not np.isfinite(mach_guess).all()
+            ):
+                raise ValueError(
+                    "initial_guess mach must contain nodes + 1 finite values"
+                )
+
         # Initial state
         Xk = self._opti.variable(nstates)
         self._opti.subject_to(self._opti.bounded(self.x_0_lb, Xk, self.x_0_ub))  # type: ignore[arg-type]  # CasADi stubs wrong: bounded(lb, expr, ub) accepts lists
@@ -616,7 +630,10 @@ class Base:
             else:
                 u_lb, u_ub = self.u_lb, self.u_ub
             self._opti.subject_to(self._opti.bounded(u_lb, Uk, u_ub))  # type: ignore[arg-type]  # CasADi stubs reject valid list bounds
-            self._opti.set_initial(Uk, self.u_guess)
+            control_guess = np.array(self.u_guess, dtype=float, copy=True)
+            if mach_guess is not None:
+                control_guess[0] = np.clip(mach_guess[k], u_lb[0], u_ub[0])
+            self._opti.set_initial(Uk, control_guess)
 
         for k in range(self.nodes):
             if variable_timestep:
