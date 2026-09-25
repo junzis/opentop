@@ -59,6 +59,14 @@ points from a path audit for the specific route, mesh, and objective, then audit
 the new solution again. The optimizer does not select them automatically, and
 these additional samples do not guarantee feasibility everywhere between them.
 
+For complete flights with ordered waypoints, the departure and arrival headings
+follow the first and last nonzero route legs in the optimizer projection. Without
+waypoints, the direct origin-to-destination heading remains the endpoint default.
+Waypoint disks use dimensionless residuals while `waypoint_tolerance_m` remains
+in metres. On dense or uneven route meshes, set `dt_min` and `dt_max` explicitly;
+the automatic time bounds assume similarly sized intervals and can restrict
+short segments too much.
+
 This replaces the previous piecewise-constant control transcription. Saved
 trajectory DataFrames retain their columns and `N+1` rows. The numeric export
 helper still accepts historical `N`-column control arrays for replaying old data.

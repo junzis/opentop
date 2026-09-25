@@ -68,6 +68,7 @@ class CompleteFlight(Base):
         h_min = 100 * ft
 
         psi = self._compute_bearing_psi()
+        psi_start, psi_end = self._endpoint_headings(kwargs.get("waypoints"))
         min_mach = 0.3 if self.performance_model == "bada4" else 0.1
         mass_lower = self.mass_min if self.payload is not None else self.oew * 0.5
 
@@ -84,12 +85,12 @@ class CompleteFlight(Base):
         self.x_ub = [x_max, y_max, h_max, self.mass_init_ub, ts_max]
 
         # Control init - lower and upper bounds
-        self.u_0_lb = [min_mach, 500 * fpm, psi]
-        self.u_0_ub = [0.3, 2500 * fpm, psi]
+        self.u_0_lb = [min_mach, 500 * fpm, psi_start]
+        self.u_0_ub = [0.3, 2500 * fpm, psi_start]
 
         # Control final - lower and upper bounds
-        self.u_f_lb = [min_mach, -1500 * fpm, psi]
-        self.u_f_ub = [0.3, -300 * fpm, psi]
+        self.u_f_lb = [min_mach, -1500 * fpm, psi_end]
+        self.u_f_ub = [0.3, -300 * fpm, psi_end]
 
         # Control - Lower and upper bound
         self.u_lb = [min_mach, -2500 * fpm, psi - pi / 2]

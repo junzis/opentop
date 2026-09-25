@@ -3,10 +3,12 @@
 from math import pi
 from typing import cast
 
+import casadi as ca
 import openap
 import pytest
 from openap.aero import fpm
 
+import numpy as np
 import opentop as top
 import pandas as pd
 
@@ -161,3 +163,53 @@ def test_waypoint_latitude_is_validated(aircraft_type, short_flight):
 
     with pytest.raises(ValueError, match="latitude"):
         opt.trajectory(objective="fuel", waypoints=[(95.0, 0.0)])
+
+
+@pytest.mark.parametrize("tolerance", [500.0, 2000.0, 10000.0])
+def test_waypoint_disk_is_dimensionless_and_preserves_radius(tolerance):
+    opt = top.CompleteFlight("A320", "LFPG", "LIRF", 0.85)
+    opt.setup(nodes=3)
+    opt._opti = ca.Opti()
+    states = [opt._opti.variable(2) for _ in range(4)]
+    waypoint = (48.8, 2.5)
+    opt._constrain_waypoints(
+        states,
+        [waypoint],
+        waypoint_tolerance_m=tolerance,
+        waypoint_node_indices=[1],
+    )
+    center = np.array(opt.proj(waypoint[1], waypoint[0]))
+    assert float(opt._opti.debug.value(opt._opti.ubg)) == 1.0
+    for radius, expected in [(0.0, 0.0), (1.0, 1.0), (2.0, 4.0)]:
+        opt._opti.set_initial(
+            states[1], center + np.array([0.6, 0.8]) * radius * tolerance
+        )
+        value = opt._opti.debug.value(opt._opti.g, opt._opti.initial())
+        assert float(value) == pytest.approx(expected, abs=1e-10)
+
+
+def test_complete_flight_endpoint_headings_follow_projected_route():
+    opt = top.CompleteFlight("A320", "LFPG", "LIRF", 0.85)
+    origin = np.array(opt.proj(opt.lon1, opt.lat1))
+    destination = np.array(opt.proj(opt.lon2, opt.lat2))
+    # Southwest departure crosses atan2's branch cut; arrival travels east.
+    first = origin + np.array([-5000.0, -20000.0])
+    last = destination - [20000.0, 0.0]
+    route = []
+    for point in (origin, first, last, destination):
+        lon, lat = opt.proj(*point, inverse=True)
+        route.append((float(lat), float(lon)))
+    opt.init_conditions(waypoints=route)
+    initial = opt.u_0_lb[2]
+    final = opt.u_f_lb[2]
+    np.testing.assert_allclose(
+        [np.sin(initial), np.cos(initial)],
+        (first - origin) / np.linalg.norm(first - origin),
+        atol=1e-10,
+    )
+    np.testing.assert_allclose([np.sin(final), np.cos(final)], [1, 0], atol=1e-10)
+    assert opt.u_lb[2] < initial < opt.u_ub[2]
+    assert opt.u_0_ub[2] == initial
+    assert opt.u_f_ub[2] == final
+    opt.init_conditions()
+    assert opt.u_0_lb[2] == opt.u_f_lb[2] == opt._compute_bearing_psi()

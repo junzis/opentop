@@ -290,6 +290,29 @@ class Base:
         hdg = oc.geo.bearing(self.lat1, self.lon1, self.lat2, self.lon2)
         return hdg * np.pi / 180
 
+    def _endpoint_headings(self, waypoints: Any = None) -> tuple[float, float]:
+        """Use projected route tangents at endpoints for waypoint flights."""
+        psi = self._compute_bearing_psi()
+        route = self._normalize_waypoints(waypoints)
+        if not route:
+            return psi, psi
+        coordinates = np.array(
+            [
+                self.proj(self.lon1, self.lat1),
+                *[self.proj(lon, lat) for lat, lon in route],
+                self.proj(self.lon2, self.lat2),
+            ]
+        )
+        legs = np.diff(coordinates, axis=0)
+        legs = legs[np.linalg.norm(legs, axis=1) > 1e-6]
+        if not len(legs):
+            return psi, psi
+        bearings = np.arctan2(legs[[0, -1], 0], legs[[0, -1], 1])
+        # A southwest course may be returned as a negative angle. Keep both
+        # endpoint headings on the same branch as the interior heading bounds.
+        bearings = psi + (bearings - psi + np.pi) % (2 * np.pi) - np.pi
+        return float(bearings[0]), float(bearings[1])
+
     def initial_guess(self, flight: pd.DataFrame | None = None) -> np.ndarray:
         """Generate initial guess for the optimizer.
 
@@ -868,8 +891,12 @@ class Base:
         indices = self._waypoint_node_indices(normalized, waypoint_node_indices)
         for index, (lat, lon) in zip(indices, normalized):
             xp, yp = self.proj(lon, lat)
-            dist2 = (X[index][0] - xp) ** 2 + (X[index][1] - yp) ** 2
-            self._opti.subject_to(dist2 <= waypoint_tolerance_m**2)
+            # The route seed can lie exactly on a waypoint, where the distance
+            # gradient is zero and IPOPT cannot infer a useful initial scale.
+            # Express the same disk in tolerance units, not square metres.
+            dx = (X[index][0] - xp) / waypoint_tolerance_m
+            dy = (X[index][1] - yp) / waypoint_tolerance_m
+            self._opti.subject_to(dx**2 + dy**2 <= 1)
 
     def _constrain_performance_model_domain(self, xdot: ca.MX) -> None:
         """Keep symbolic dynamics inside model-valid regions.
