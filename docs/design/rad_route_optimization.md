@@ -15,7 +15,7 @@ therefore uses a hybrid process:
 
 This keeps the existing `CompleteFlight` and phase APIs unchanged. RAD-specific
 processing is available under `opentop.rad`; its selected paths cross the common
-`RouteOption` boundary described in `route_choice_optimization.md` before using
+`RouteOption` boundary described in [route-choice guide](route_choice_optimization.md) before using
 the existing waypoint interface.
 
 ## High-level API
@@ -163,7 +163,7 @@ descent should be part of the optimized trajectory.
 
 The implemented foundation includes NNPT, ARP, RTS, lossless ASE, initial AWK and
 FLC2 parsing, layered flight graphs, A*/Yen search, candidate pruning, nominal
-fuel ranking, route-shaped initial guesses, serial/coarse-to-fine OpenTOP handoff,
+fuel ranking, route-shaped initial guesses, serial OpenTOP handoff,
 and post-solve waypoint validation.
 
 Before an ASE dataset is route-usable, its authoritative field-code mapping must

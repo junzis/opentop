@@ -252,6 +252,8 @@ class PhysicsCorrectedFuelFlow:
 
     Physical models must provide CasADi-compatible ``enroute`` in OpenAP
     units. No default transition Mach is inferred from training coverage.
+    Aircraft and engine metadata are checked when exposed by the supplied
+    models. Custom models without metadata remain the caller's responsibility.
     Neither correction is a validated fuel model or a force-model override.
     """
 
@@ -292,8 +294,40 @@ class PhysicsCorrectedFuelFlow:
                 "wave_increment requires wave_free_model and no reference_mach."
             )
 
+        for label, model in (
+            ("physics_model", physics_model),
+            ("wave_free_model", wave_free_model),
+        ):
+            aircraft = getattr(model, "actype", getattr(model, "ac", None))
+            if isinstance(aircraft, str) and (
+                aircraft.upper().split("-", 1)[0] != neural.actype
+            ):
+                raise ValueError(f"{label} aircraft must match the neural model.")
+        if method == "wave_increment":
+            engines = []
+            for model in (physics_model, wave_free_model):
+                engine = getattr(model, "engine", None)
+                name = (
+                    engine.get("name")
+                    if isinstance(engine, dict)
+                    else getattr(model, "engtype", None)
+                )
+                engines.append(name.upper() if isinstance(name, str) else None)
+            if all(engines) and engines[0] != engines[1]:
+                raise ValueError("Wave correction models must use the same engine.")
+            for model, expected in ((physics_model, True), (wave_free_model, False)):
+                drag = getattr(model, "drag", None)
+                enabled = getattr(drag, "wave_drag", None)
+                if enabled is not None and bool(enabled) != expected:
+                    raise ValueError(
+                        "Wave correction requires wave drag enabled in physics_model "
+                        "and disabled in wave_free_model."
+                    )
+
         self.actype = neural.actype
         self.neural = neural
+        self.physics_model = physics_model
+        self.wave_free_model = wave_free_model
         self.method = method
         self.reference_mach = reference_mach
         self.transition_width = transition_width

@@ -18,6 +18,7 @@ from .cruise import Cruise
 
 if TYPE_CHECKING:
     from ._options import TrajectoryResult
+    from .neural import AcropoleFuelFlow, PhysicsCorrectedFuelFlow
 
 
 class Descent(Base):
@@ -34,6 +35,8 @@ class Descent(Base):
         dT: float = 0.0,
         performance_model: str = "openap",
         bada_path: str | None = None,
+        *,
+        fuel_model: AcropoleFuelFlow | PhysicsCorrectedFuelFlow | None = None,
     ) -> None:
         super().__init__(
             actype,
@@ -45,6 +48,7 @@ class Descent(Base):
             dT=dT,
             performance_model=performance_model,
             bada_path=bada_path,
+            fuel_model=fuel_model,
         )
         self.cruise = Cruise(
             actype,
@@ -56,6 +60,7 @@ class Descent(Base):
             dT=dT,
             performance_model=performance_model,
             bada_path=bada_path,
+            fuel_model=fuel_model,
         )
 
     def init_conditions(

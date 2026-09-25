@@ -109,8 +109,8 @@
 
     .components .card {
       min-height: 80px;
-      padding-top: 15px;
-      padding-bottom: 16px;
+      padding-top: 10px;
+      padding-bottom: 11px;
     }
 
     .card.blue {
@@ -282,11 +282,11 @@
         <div class="cards">
           <article class="card blue">
             <h3>Complete-flight planning</h3>
-            <p>Optimize climb, cruise, descent, and arrival in one trajectory.</p>
+            <p>Optimize climb, cruise and descent; compare route alternatives.</p>
           </article>
           <article class="card">
             <h3>Phase optimization</h3>
-            <p>Focus on climb, cruise, or descent as a separate problem.</p>
+            <p>Solve one phase, or coordinate cruise/descent flights jointly.</p>
           </article>
           <article class="card green">
             <h3>Real-flight replay</h3>
@@ -298,7 +298,7 @@
           </article>
           <article class="card violet">
             <h3>Robust candidate search</h3>
-            <p>Compare solutions from varied initial trajectory guesses.</p>
+            <p>Compare starts with position, altitude and optional Mach jitter.</p>
           </article>
         </div>
       </section>
@@ -312,19 +312,19 @@
           </article>
           <article class="card">
             <h3>Route and phase scope</h3>
-            <p>Airports or lat/lon endpoints; complete flight or one phase.</p>
+            <p>Endpoints, ordered waypoints, route alternatives or recorded tracks.</p>
           </article>
           <article class="card">
-            <h3>Performance model</h3>
-            <p>OpenAP, BADA3, or BADA4 aircraft envelopes.</p>
+            <h3>Performance and fuel</h3>
+            <p>OpenAP/BADA forces; optional neural fuel with physics corrections.</p>
           </article>
           <article class="card blue">
             <h3>Objectives and limits</h3>
-            <p>Fuel, time, cost index, climate, maximum fuel, fixed profiles.</p>
+            <p>Fuel, time, climate, cost index; fixed Mach, altitude or track.</p>
           </article>
           <article class="card green">
             <h3>Atmosphere and wind</h3>
-            <p>Wind fields, timing, and temperature shift.</p>
+            <p>Temperature and wind; neural fuel and fleets require still air.</p>
           </article>
           <article class="card amber">
             <h3>Cost-grid context</h3>
@@ -354,7 +354,7 @@
           <li>fuel capacity and mass constraints</li>
           <li>heading and phase behavior</li>
         </ul>
-        <div class="result-pill">physically constrained trajectory</div>
+        <div class="result-pill">locally optimized trajectory</div>
       </section>
 
       <section class="lane outputs">
@@ -366,7 +366,7 @@
           </article>
           <article class="card green">
             <h3>Fuel and cost accounting</h3>
-            <p>Fuel burn, per-segment fuel cost, and optional grid cost.</p>
+            <p>Mass-derived fuel; solver grid quadrature and node cost estimates.</p>
           </article>
           <article class="card amber">
             <h3>Objective summary</h3>
@@ -374,7 +374,7 @@
           </article>
           <article class="card violet">
             <h3>Diagnostics</h3>
-            <p>Solver status, iterations, and multi-start candidate ranking.</p>
+            <p>Solver status, multi-start ranking and fleet separation checks.</p>
           </article>
           <article class="card rose">
             <h3>Reusable artifacts</h3>

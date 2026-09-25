@@ -373,3 +373,91 @@ def test_complete_flight_neural_mass_accounting(fuel):
     )
     assert df.vertical_rate.max() > 0
     assert df.vertical_rate.min() < 0
+
+
+@pytest.mark.parametrize("performance_model", ["openap", "bada3", "bada4"])
+@pytest.mark.parametrize("temperature", [0, 15])
+def test_override_temperature_consistent_across_consumers(
+    fuel, monkeypatch, performance_model, temperature
+):
+    from dataclasses import replace
+
+    from opentop._performance import build_performance_models
+
+    # Exercise dispatch for each baseline without requiring licensed BADA files.
+    models = build_performance_models("A320", engine=None, use_synonym=False)
+    monkeypatch.setattr(
+        "opentop.base.build_performance_models",
+        lambda *a, **k: replace(models, name=performance_model),
+    )
+    corrected = top.PhysicsCorrectedFuelFlow(
+        fuel, SyntheticPhysics(), reference_mach=0.76
+    )
+    opt = top.Cruise(
+        "A320",
+        "EHAM",
+        "EDDF",
+        dT=temperature,
+        performance_model=performance_model,
+        fuel_model=corrected,
+    )
+    x = np.array([0, 0, 32000 * ft, 62000, 0])
+    u = np.array([0.82, 0, 0])
+    rate = -float(opt.xdot(x, u)[3])
+    assert float(opt.obj_fuel(x, u, 1)) == pytest.approx(rate, rel=1e-10)
+    assert float(opt.obj_fuel(x, u, 1, symbolic=False)) == pytest.approx(rate, rel=1e-5)
+    co2 = opt._calc_emission(x, u, symbolic=False)[0]
+    assert float(co2) == pytest.approx(float(opt.emission.co2(rate)), rel=1e-5)
+    opt.setup(nodes=2)
+    states = np.repeat(x[:, None], 3, axis=1)
+    states[4] = [0, 30, 60]
+    states[3] -= np.array([0, 30, 60]) * rate
+    controls = np.repeat(u[:, None], 3, axis=1)
+    df = opt.to_trajectory(60, states, controls)
+    assert df.fuelflow.iloc[0] == pytest.approx(rate, rel=1e-5)
+
+
+def test_reject_incompatible_correction_models(fuel):
+    import openap.casadi as oc
+
+    wave = oc.FuelFlow("A320", wave_drag=True)
+    wrong_aircraft = oc.FuelFlow("B738", wave_drag=False)
+    with pytest.raises(ValueError, match="aircraft"):
+        top.PhysicsCorrectedFuelFlow(fuel, wrong_aircraft, reference_mach=0.76)
+    with pytest.raises(ValueError, match="aircraft"):
+        top.PhysicsCorrectedFuelFlow(
+            fuel, wave, method="wave_increment", wave_free_model=wrong_aircraft
+        )
+    wrong_engine = oc.FuelFlow("A320", "V2500-A1", wave_drag=False)
+    with pytest.raises(ValueError, match="same engine"):
+        top.PhysicsCorrectedFuelFlow(
+            fuel, wave, method="wave_increment", wave_free_model=wrong_engine
+        )
+    with pytest.raises(ValueError, match="wave drag"):
+        top.PhysicsCorrectedFuelFlow(
+            fuel, wave, method="wave_increment", wave_free_model=wave
+        )
+    corrected = top.PhysicsCorrectedFuelFlow(
+        fuel,
+        wave,
+        method="wave_increment",
+        wave_free_model=oc.FuelFlow("A320", wave_drag=False),
+    )
+    assert corrected.enroute(62000, 450, 32000) > 0
+
+
+@pytest.mark.parametrize("phase", [top.Climb, top.Descent])
+def test_neural_phase_and_preliminary_cruise_use_same_model(fuel, phase):
+    opt = phase("A320", "LFPG", "EDDM", fuel_model=fuel)
+    assert opt.cruise.fuel_model is fuel
+    with pytest.raises(ValueError, match="still air"):
+        opt.enable_wind(pd.DataFrame())
+    opt.setup(nodes=12, max_iter=1000)
+    opt.cruise.setup(nodes=6, max_iter=800)
+    result = opt.trajectory(objective="fuel", remove_cruise=False, result_object=True)
+    assert result.success, result.status
+    assert result.objective == pytest.approx(result.fuel, abs=1e-3)
+    df = result.df
+    np.testing.assert_allclose(
+        df.fuelflow, fuel.enroute(df.mass, df.tas, df.altitude, df.vertical_rate)
+    )

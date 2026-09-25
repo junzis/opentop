@@ -16,6 +16,7 @@ from .cruise import Cruise
 
 if TYPE_CHECKING:
     from ._options import TrajectoryResult
+    from .neural import AcropoleFuelFlow, PhysicsCorrectedFuelFlow
 
 
 class Climb(Base):
@@ -32,6 +33,8 @@ class Climb(Base):
         dT: float = 0.0,
         performance_model: str = "openap",
         bada_path: str | None = None,
+        *,
+        fuel_model: AcropoleFuelFlow | PhysicsCorrectedFuelFlow | None = None,
     ) -> None:
         """Climb phase trajectory optimizer.
 
@@ -45,6 +48,7 @@ class Climb(Base):
             dT: ISA temperature deviation (K). Default 0.
             performance_model: Performance model name: "openap", "bada3", or "bada4".
             bada_path: Path to BADA data when using BADA performance models.
+            fuel_model: Still-air fuel override, also used for preliminary cruise.
         """
         super().__init__(
             actype,
@@ -56,6 +60,7 @@ class Climb(Base):
             dT=dT,
             performance_model=performance_model,
             bada_path=bada_path,
+            fuel_model=fuel_model,
         )
         self.cruise = Cruise(
             actype,
@@ -67,6 +72,7 @@ class Climb(Base):
             dT=dT,
             performance_model=performance_model,
             bada_path=bada_path,
+            fuel_model=fuel_model,
         )
 
     def init_conditions(
@@ -172,7 +178,8 @@ class Climb(Base):
                 computed automatically.
             alt_stop: Top of climb altitude in feet.
             remove_cruise: Remove level-off points. Default True.
-            initial_guess: Unused by Climb (accepted for API symmetry).
+            initial_guess: Optional Mach profile for control initialization.
+                Climb still constructs its own state guess.
             interpolant: CasADi grid-cost interpolant (optional).
             n_dim: Interpolant input dimension (3 or 4). Auto-detected
                 from the interpolant by default.

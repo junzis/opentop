@@ -1,13 +1,18 @@
-# Acropole neural fuel optimization: initial experiment
+# Acropole neural fuel integration and experiment history
+
+Current API contract reviewed 2026-09-25. See the [API guide](../api-guide.md).
+The dated results below record earlier experiments, not the current paper
+benchmark or a guarantee of convergence. Images under `examples/figures/` are
+local generated artifacts; run the adjacent commands to reproduce them.
 
 This branch adds an experimental `AcropoleFuelFlow` adapter and a `fuel_model`
-argument to `Cruise`. OpenAP (or the selected performance model) still supplies
+argument to `Cruise`, `CompleteFlight`, `Climb`, and `Descent`. OpenAP (or the selected performance model) still supplies
 drag, thrust, and aircraft operating constraints. Acropole supplies fuel flow
 in the mass dynamics, fuel objective, numeric objective evaluation, emissions
 fuel input, and trajectory `fuelflow` column. Integrated `fuel_cost` remains
 derived from mass loss.
 
-The initial experiment is **still-air, constant-Mach, constant-altitude cruise**.
+The original experiment was **still-air, constant-Mach, constant-altitude cruise**.
 Altitude and Mach are chosen by the optimizer but held constant along each
 trajectory. The route, initial mass, altitude bounds, mesh, and force models are
 identical for OpenAP and Acropole. This makes zero speed derivatives consistent
@@ -64,9 +69,11 @@ and output scaling by takeoff fuel flow times engine count follow upstream.
   domain is inferred or enforced by the adapter. The example's 30,000--37,000 ft
   cruise envelope is an explicit experiment choice, not a validated domain.
   Research use needs validation on the aircraft, mass, speed, and altitude range.
-- Python `Cruise` and `CompleteFlight` accept `fuel_model`. Standalone `Climb`,
-  `Descent`, fleet configuration, and CLI selection do not yet expose the option.
-  Complete-flight use retains the zero speed-derivative feature approximation.
+- Python `Cruise`, `CompleteFlight`, `Climb`, and `Descent` accept `fuel_model`.
+  Climb/descent pass the same override to their preliminary cruise optimizer.
+  Fleet specs carry an already configured Cruise or Descent optimizer; the CLI
+  does not expose the option.
+  All phases retain the zero speed-derivative feature approximation.
 
 ## Run
 
@@ -236,7 +243,7 @@ wave drag is absent from Acropole's training data or isolate wave drag as the
 only cause. These diagnostics use the original Acropole model. Optional
 physics corrections are described below; no retraining has been applied.
 
-![Mach diagnostic](../../examples/figures/neural_debug/mach_diagnostic.png)
+Local generated figure: `examples/figures/neural_debug/mach_diagnostic.png` (Mach diagnostic).
 
 ### Which constraints select the neural solutions?
 
@@ -257,7 +264,7 @@ The fixed-mass feasible-region maps independently locate nearby solutions.
 These margins and their physical justification deserve sensitivity analysis
 before drawing conclusions for a paper.
 
-![Feasible regions](../../examples/figures/neural_debug/feasible_landscape.png)
+Local generated figure: `examples/figures/neural_debug/feasible_landscape.png` (Feasible regions).
 
 ### Conversion and local-minimum checks
 
@@ -269,7 +276,7 @@ before drawing conclusions for a paper.
   0.000002 kg. This reduces concern about local trapping for this experiment,
   without proving a global optimum.
 
-![Seed sensitivity](../../examples/figures/neural_debug/multistart.png)
+Local generated figure: `examples/figures/neural_debug/multistart.png` (Seed sensitivity).
 
 ### Reporting bug found and fixed
 
@@ -419,9 +426,9 @@ from M 0.81 / 31,000 ft instead of M 0.74 / 33,000 ft; the maximum fuel
 difference across starts was 0.00000101 kg. This supports repeatability
 for these starts without proving a global optimum or physical accuracy.
 
-![Physics correction speed response](../../examples/figures/physics_correction/physics_correction_sweep.png)
+Local generated figure: `examples/figures/physics_correction/physics_correction_sweep.png` (Physics correction speed response).
 
-![Physics correction optima](../../examples/figures/physics_correction/physics_correction_optimization.png)
+Local generated figure: `examples/figures/physics_correction/physics_correction_optimization.png` (Physics correction optima).
 
 Verification for this change: 34 neural-fuel and cruise tests passed, including
 derivatives, transition continuity, temperature handling and fuel accounting.
@@ -449,9 +456,9 @@ with each solution's own fuel model. These are model predictions, not measured
 fuel savings. The script verifies finite state/rate data, increasing times,
 trajectory/report agreement and fuel accounting before rendering.
 
-![Profiles with OpenAP constraints](../../examples/figures/physics_correction/optimized_profiles_openap.png)
+Local generated figure: `examples/figures/physics_correction/optimized_profiles_openap.png` (Profiles with OpenAP constraints).
 
-![Profiles with BADA 4 constraints](../../examples/figures/physics_correction/optimized_profiles_bada4.png)
+Local generated figure: `examples/figures/physics_correction/optimized_profiles_bada4.png` (Profiles with BADA 4 constraints).
 
 ## Complete-flight paper experiment
 
@@ -466,3 +473,25 @@ The opentop BADA3 enroute wrapper enforces the idle lower bound in returned
 kg/s units, for both symbolic and numeric paths. Symbolic smoothing uses the
 width of 0.001 kg/s (at most 0.0005 kg/s smoothing increment at the crossing). Baselines computed before this correction
 are diagnostic artifacts and must not be used as paper comparison results.
+
+## Model configuration contract
+
+`performance_model` chooses the baseline thrust, drag and default fuel models.
+`fuel_model=None` retains that default fuel model; an explicit override replaces
+fuel flow in every consumer, including mass dynamics, objectives, emissions and
+reporting. Temperature is passed to the active fuel model regardless of which
+baseline supplies the forces. Numeric fuel is resolved once per optimizer.
+
+Aircraft limits and mass bounds still use OpenAP aircraft data. Acropole's CSV
+parameters are its training normalization and output scale, not replacement
+operating limits. `engine=` configures the baseline models where supported and
+emissions; it does not recalibrate Acropole or reconfigure physical models
+already supplied to a correction. BADA performance data determine their own
+engine variant. Build a new optimizer/model for a different configuration.
+
+Correction constructors reject mismatched aircraft and, for a wave-model pair,
+mismatched engines when the models expose this metadata. Exposed wave-drag
+settings must be enabled/disabled in the respective models. Custom models without
+metadata are supported, but the caller must ensure they use the same aircraft,
+engine, units, and settings other than wave drag. A correction can intentionally
+use OpenAP while the optimizer uses BADA forces.

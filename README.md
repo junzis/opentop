@@ -1,10 +1,12 @@
-# opentop: Open Trajectory Optimizer
+# OpenTOP: Open Trajectory Optimizer
 
 `opentop` is **v2 of [`openap-top`](https://pypi.org/project/openap-top/)**. The package has been renamed and restructured: what used to be installed as `openap-top` and imported as `openap.top` now installs as `opentop` and imports as `import opentop`. The three headline changes in v2.0:
 
 - **New Opti-stack backend** — NLP construction has moved to CasADi's Opti stack, removing ~400 lines of boilerplate and fixing several long-standing bugs.
 - **Standalone package** — `opentop` is no longer a namespace extension of `openap`; it installs as a top-level package and imports as `import opentop`.
 - **Command-line interface** — `opentop optimize` and `opentop gengrid` expose the optimizer and grid-cache builder from the shell.
+
+See the [documentation index](docs/README.md) for the current API and architecture.
 
 See [What's New in 2.0](#whats-new-in-20) below for the full migration table.
 
@@ -448,3 +450,30 @@ See the [changelog](https://github.com/junzis/opentop/releases) for details.
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
+### Optional neural fuel model
+
+The Python optimizers `Cruise`, `CompleteFlight`, `Climb`, and `Descent` accept
+`fuel_model=` alongside `performance_model=`. The performance model supplies
+forces and default fuel flow; a fuel override replaces only fuel flow throughout
+the optimization and reporting. Omitting it preserves the default behavior.
+
+Install `opentop[neural]` and supply your Acropole model/parameter files:
+
+```python
+fuel = top.AcropoleFuelFlow(
+    "A320",
+    model_path="acropole_fuel_model.onnx",
+    aircraft_params_path="aircraft_params.csv",
+    activation_smoothing=0.01,
+)
+optimizer = top.CompleteFlight(
+    "A320", "LFPG", "EDDM", performance_model="openap", fuel_model=fuel,
+)
+```
+
+Neural optimization currently requires still air and uses zero speed-derivative
+features. Smoothing changes the released network and requires validation.
+`engine=` does not change Acropole's training parameters or an independently
+constructed physics correction. See [the neural fuel notes](docs/design/neural_fuel.md)
+for correction configuration and limitations.

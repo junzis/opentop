@@ -1,125 +1,82 @@
-# OpenTOP High-Level Flow
+# OpenTOP execution flow
 
-This diagram summarizes the main execution paths in OpenTOP: the Python API,
-the CLI, optional grid/wind/replay inputs, NLP construction, solving, and
-trajectory reporting.
+Current working-tree architecture, reviewed 2026-09-25. See the
+[API guide](api-guide.md) for units, options and limitations.
 
 ```mermaid
 flowchart TD
-    user[User code or CLI] --> entry{Entry point}
-
-    entry -->|Python API| api[opentop.CompleteFlight / Cruise / Climb / Descent]
-    entry -->|opentop optimize| cli_opt[CLI optimize command]
-    entry -->|opentop replay| cli_replay[CLI replay command]
-    entry -->|opentop gengrid| cli_grid[CLI gengrid command]
-
-    cli_opt --> phase_select[Select phase class]
-    cli_opt --> objective_parse[Parse objective expression]
-    cli_opt --> grid_load[Load optional grid interpolant]
-    phase_select --> api
-    objective_parse --> objective_input[Objective spec or callable]
-    grid_load --> optional_inputs
-
-    cli_grid --> raw_grid[Raw parquet cost grid]
-    raw_grid --> grid_filter[Optional bbox/time filtering and altitude padding]
-    grid_filter --> build_grid[Build CasADi interpolant]
-    build_grid --> cache_grid[Save .casadi cache]
-    cache_grid --> grid_load
-
-    cli_replay --> flight_fetch[Fetch/load actual flight]
-    cli_replay --> meteo_fetch[Optional ERA5 meteo]
-    flight_fetch --> replay_endpoints[Infer endpoints and aircraft]
-    meteo_fetch --> wind_input[Wind DataFrame]
-    meteo_fetch --> contrail_grid[Contrail cost grid]
-    contrail_grid --> build_grid
-    replay_endpoints --> api
-    wind_input --> optional_inputs
-
-    api --> base_init[Base.__init__]
-    base_init --> airport_projection[Resolve airports and projection]
-    base_init --> performance[Build OpenAP/BADA models]
-    base_init --> setup[setup: nodes, collocation degree, IPOPT options]
-
-    api --> trajectory[trajectory]
-    optional_inputs[Optional inputs: wind, grid, initial guess, payload, max fuel] --> trajectory
-    objective_input --> trajectory
-
-    trajectory --> init_conditions[Phase init_conditions]
-    init_conditions --> bounds[State/control bounds and guesses]
-
-    bounds --> build_opti[Base._build_opti]
-    build_opti --> init_model[init_model: states, controls, objective, dynamics]
-    init_model --> dynamics[_dynamics.xdot]
-    init_model --> objectives[_objectives resolver and objective functions]
-    build_opti --> collocation[Legendre direct-collocation variables and equations]
-    collocation --> shared_constraints[Shared state/control bounds and continuity]
-
-    shared_constraints --> phase_constraints{Phase constraints}
-    phase_constraints --> complete[CompleteFlight: climb/cruise/descent shaping, energy, smoothing, fuel]
-    phase_constraints --> cruise[Cruise: cruise performance, optional fixed Mach/alt/track]
-    phase_constraints --> climb[Climb: preliminary cruise context, energy, range, climb filtering]
-    phase_constraints --> descent[Descent: preliminary cruise context, energy, descent filtering]
-
-    complete --> solve[Base._solve]
-    cruise --> solve
-    climb --> solve
-    descent --> solve
-
-    solve --> ipopt[CasADi Opti + IPOPT]
-    ipopt --> numeric_solution[Optimized X/U, final time, solver stats]
-    numeric_solution --> dataframe[_trajectory.to_dataframe]
-    dataframe --> traj_df[Trajectory DataFrame]
-    numeric_solution --> result_obj[Optional TrajectoryResult]
-
-    traj_df --> downstream{Downstream use}
-    result_obj --> downstream
-    downstream --> analysis[User analysis or saved parquet]
-    downstream --> vis[opentop.vis trajectory plots]
-    downstream --> multistart[_multi_start repeated solves and best candidate]
+    python[Python API] --> phase[CompleteFlight / Cruise / Climb / Descent]
+    cli[CLI optimize / replay] --> phase
+    grid[CLI gengrid: parquet to cached interpolant] --> inputs
+    inputs[Wind, grids, waypoints, initial guesses] --> trajectory
+    phase --> baseline[OpenAP / BADA forces and default fuel]
+    baseline --> fuel[Optional neural fuel override]
+    fuel --> trajectory[trajectory]
+    multi[multi_start_trajectory] --> trajectory
+    routes[RouteOption / RouteNetwork / RAD selection] --> routeopt[optimize_routes: fresh optimizer per route]
+    routeopt --> phase
+    trajectory --> bounds[Phase bounds and initial guesses]
+    bounds --> shared[Base._add_transcription: dynamics, objective and collocation]
+    shared --> constraints[Phase constraints and sampled track constraints]
+    fleet[MultiAircraft: configured Cruise / Descent FlightSpecs] --> shared
+    fleet --> separation[Joint separation constraints]
+    separation --> solve[CasADi Opti / IPOPT]
+    constraints --> solve
+    solve --> costs[Objective and grid-cost quadrature]
+    solve --> report[DataFrame conversion and solver status]
+    costs --> results[TrajectoryResult / candidate ranking / fleet result]
+    report --> results
 ```
 
-## Main Pipeline
+## Construction and transcription
 
-The package API is exported from `opentop/__init__.py`. Users normally create
-one of the phase optimizers and call `trajectory()`.
+The public API is exported from `opentop/__init__.py`. Base initialization
+resolves endpoints, selects performance models, sets mass bounds, and configures
+solver defaults. `fuel_model` replaces fuel flow while retaining baseline forces
+and OpenAP aircraft limits. Neural overrides require still air. Physical
+correction models have their own checked aircraft/engine configuration; `engine=`
+on the optimizer does not rebuild those models or recalibrate Acropole.
 
-All phase classes inherit from `Base`. The phase method first calls
-`init_conditions()` to set state and control bounds, endpoint constraints, and
-initial guesses. It then calls `Base._build_opti()`, which creates the CasADi
-Opti problem, symbolic state/control variables, free final time, objective
-quadrature, collocation equations, and continuity constraints.
+Phase `init_conditions()` methods establish state/control bounds and guesses.
+Climb and descent can first solve a preliminary cruise, with the same fuel
+selection, to obtain boundary context. `_build_opti()` is the standalone
+wrapper around the reusable `_add_transcription()` scaffold. Cruise and descent
+also expose reusable formulations for joint fleet problems.
 
-After the shared NLP scaffold is built, the phase class adds its own
-constraints. `CompleteFlight` adds full-flight shaping and energy constraints,
-`Cruise` adds cruise-specific and optional fixed-profile constraints, while
-`Climb` and `Descent` can first run a preliminary cruise solve to obtain the
-phase boundary altitude and Mach context.
+The scaffold creates state/control variables, final time, Legendre collocation
+equations, continuity and objective quadrature. Controls interpolate linearly;
+phase-specific constraints follow. Cruise can choose a constant Mach, pin a
+specified `mach_value`, or follow a recorded spline track with sampled tolerance
+checks. These options are distinct from constant-heading constraints.
 
-Finally, `Base._solve()` configures IPOPT, solves the NLP, stores solver stats
-and the physical objective value, and delegates numeric output conversion to
-`_trajectory.to_dataframe()`.
+## Solving and reporting
 
-## Data And Objective Inputs
+`Base._solve()` configures IPOPT and stores its status, objective value and grid
+quadrature. `_trajectory.to_dataframe()` reports numeric states and controls,
+mass-derived fuel costs and instantaneous fuel flow. The resolved numeric fuel
+model is shared with numeric objectives and emissions. `TrajectoryResult` uses
+solver grid quadrature when available; summing the DataFrame grid-cost column
+is a different, node-based approximation.
 
-Objectives can be built-in strings such as `fuel`, `time`, `ci:N`, climate
-metrics, or `grid_cost`, or they can be user callables. `_objectives.py`
-contains the pure objective implementations and registry. Grid-cost objectives
-use CasADi interpolants from `tools.py`; bspline grid costs trigger exact
-Hessian handling in the optimizer setup.
+Multi-start wraps repeated solves and ranks successful candidates ahead of failed
+ones, then by objective. Optional Mach jitter supplements lateral and altitude
+perturbations. It is not post-processing and does not certify global optimality.
+See [candidate accounting](design/multi_start_trajectory.md).
 
-Wind enters through `Base.enable_wind()`, which fits a `tools.PolyWind` model.
-That wind model is used inside `_dynamics.xdot()` so both numeric and symbolic
-state derivatives include wind components.
+`optimize_routes()` solves independent route options and selects by fuel or the
+configured objective. `MultiAircraft` instead constructs a joint NLP for cruise
+or descent aircraft and verifies sampled separation with refinement. These are
+different workflows; route-choice search does not provide fleet separation.
 
-## CLI And Replay
+## CLI and optional inputs
 
-`opentop optimize` is a thin CLI wrapper around the same phase classes. It
-parses weighted objective expressions, optionally loads a grid interpolant, runs
-`trajectory()`, and prints solver and trajectory summaries.
+`opentop optimize` parses weighted objectives and uses the same phase classes.
+`opentop gengrid` filters/pads parquet grids and saves cached CasADi interpolants.
+Grid objectives support 3D spatial and 4D time-dependent inputs; spline costs
+require appropriate exact-Hessian handling.
 
-`opentop gengrid` prepares raw parquet grids by slicing time/space, padding
-altitudes, building a CasADi interpolant, and saving a reusable `.casadi` cache.
-
-`opentop replay` fetches or loads an actual flight, optionally fetches ERA5
-weather, enables wind, builds a contrail grid interpolant when needed, runs the
-optimizer, and saves actual/optimized trajectories plus a plot.
+`opentop replay` loads or fetches a flight, infers aircraft/endpoints, optionally
+retrieves ERA5 weather and constructs contrail costs, then saves observed and
+optimized trajectories. `enable_wind()` fits a `PolyWind` field for dynamics;
+it rejects neural fuel overrides. Fleet wind and time-dependent grid objectives
+remain unsupported. The CLI does not currently expose neural fuel configuration.

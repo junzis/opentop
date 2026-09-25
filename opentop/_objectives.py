@@ -54,7 +54,7 @@ def obj_fuel(
     """Fuel burn objective: fuelflow * dt.
 
     Symbolic path uses the CasADi ``fuelflow`` passed in; non-symbolic path
-    reuses an explicit ``fuel_model`` or builds the selected numeric performance
+    reuses the resolved numeric ``fuel_model`` or builds the selected performance
     model so callers can evaluate the objective on solved numeric trajectories.
     """
     _, _, h, m, _ = x[0], x[1], x[2], x[3], x[4]  # type: ignore[index]  # Symbolic includes float but x is always array-like
@@ -77,10 +77,7 @@ def obj_fuel(
         )
         v = openap.aero.mach2tas(mach, h, dT=dT)  # type: ignore[arg-type]
 
-    if performance_model == "openap":
-        ff = ff_model.enroute(m, v / kts, h / ft, vs / fpm, dT=dT)
-    else:
-        ff = ff_model.enroute(m, v / kts, h / ft, vs / fpm)
+    ff = ff_model.enroute(m, v / kts, h / ft, vs / fpm, dT=dT)
     return ff * dt  # type: ignore[return-value]  # casadi arithmetic result is MX at NLP time
 
 

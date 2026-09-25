@@ -6,6 +6,9 @@ docs/superpowers/
 docs/design/*
 !docs/design/rad_route_optimization.md
 !docs/design/neural_fuel.md
+!docs/design/multi_start_trajectory.md
+!docs/design/route_choice_optimization.md
+!docs/design/scalable_fleet_optimization.md
 tests/benchmarks/
 debug/scaling/investigation/
 

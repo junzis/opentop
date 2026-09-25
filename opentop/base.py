@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import warnings
+from functools import cached_property
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
@@ -87,8 +88,10 @@ class Base:
             payload: Payload mass in kg. When provided, initial mass is optimized
                 between OEW + payload and the aircraft's fuel/MTOW limit; m0 is used
                 as the initial mass guess.
-            fuel_model: Optional neural fuel model for experimental still-air cruise.
+            fuel_model: Optional fuel-flow override for still-air optimization.
                 Overrides fuel flow while retaining the selected force models.
+                engine configures the baseline models and emissions, not the
+                override's training parameters or its correction models.
         """
         if isinstance(origin, str):
             ap1 = openap.nav.airport(origin)
@@ -163,6 +166,19 @@ class Base:
         self.objective_value: float | None = None
         self.grid_cost_value: float | None = None
         self.setup()
+
+    @cached_property
+    def _numeric_fuelflow(self) -> Any:
+        """Resolve numeric fuel once, sharing the override with symbolic dynamics."""
+        if self.fuel_model is not None:
+            return self.fuelflow
+        return build_numeric_fuelflow(
+            self.actype,
+            engtype=self.engtype,
+            use_synonym=self.use_synonym,
+            performance_model=self.performance_model,
+            bada_path=self.bada_path,
+        )
 
     def _mass_min(self, payload: float | None) -> float:
         """Minimum physically allowed mass for the optimized trajectory."""
@@ -959,15 +975,7 @@ class Base:
             emission = self.emission
             v = oc.aero.mach2tas(mach, h, dT=self.dT)
         else:
-            fuelflow = self.fuel_model
-            if fuelflow is None:
-                fuelflow = build_numeric_fuelflow(
-                    self.actype,
-                    engtype=self.engtype,
-                    use_synonym=self.use_synonym,
-                    performance_model=self.performance_model,
-                    bada_path=self.bada_path,
-                )
+            fuelflow = self._numeric_fuelflow
             emission = openap.Emission(
                 self.actype.split("-", 1)[0],
                 self.engtype,
@@ -998,7 +1006,7 @@ class Base:
             "use_synonym": self.use_synonym,
             "performance_model": self.performance_model,
             "bada_path": self.bada_path,
-            "fuel_model": self.fuel_model,
+            "fuel_model": self._numeric_fuelflow,
             "proj": self.proj,
             "calc_emission": self._calc_emission,
         }
@@ -1099,7 +1107,7 @@ class Base:
             use_synonym=self.use_synonym,
             performance_model=self.performance_model,
             bada_path=self.bada_path,
-            fuel_model=self.fuel_model,
+            fuel_model=self._numeric_fuelflow,
             interpolant=kwargs.get("interpolant", None),
             time_dependent=kwargs.get("time_dependent", True),
             n_dim=kwargs.get("n_dim"),
