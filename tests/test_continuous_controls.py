@@ -4,6 +4,7 @@ import casadi as ca
 import pytest
 
 import numpy as np
+import pandas as pd
 from opentop.base import Base
 
 
@@ -111,8 +112,11 @@ def test_state_initialization_matches_mesh_and_preserves_supplied_times(supplied
     )
     original = opt.x_guess.copy()
     problem = ca.Opti()
+    # The shared transcription also reads optional control columns from the
+    # supplied trajectory. Use a DataFrame rather than an opaque sentinel.
+    initial = pd.DataFrame(original, columns=["x", "y", "h", "mass", "ts"])
     tr = opt._add_transcription(
-        problem, "fuel", 5.0, initial_guess=object() if supplied_guess else None
+        problem, "fuel", 5.0, initial_guess=initial if supplied_guess else None
     )
     expected = original.copy()
     if not supplied_guess:
