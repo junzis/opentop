@@ -107,15 +107,18 @@ class PolyWind:
         y: float | Symbolic,
         h: float | Symbolic,
         ts: float | Symbolic,
-    ) -> np.ndarray | list[Symbolic]:
+    ) -> np.ndarray | list[float | Symbolic]:
         """Build feature row.
 
-        Polymorphic: numeric → np.ndarray; CasADi → list of SX/MX."""
+        Numeric inputs return an array; CasADi inputs return expressions and
+        numeric constants in a list.
+        """
         if isinstance(x, (ca.SX, ca.MX, ca.DM)):
             powers = self._poly.powers_  # (n_features, 4)
             feats = []
             for row in powers:
-                term = 1
+                # Numeric constants and one symbolic graph type share this accumulator.
+                term: Any = 1
                 for var, p in zip((x, y, h, ts), row):
                     if p == 0:
                         continue
@@ -136,7 +139,7 @@ class PolyWind:
     ) -> float | Symbolic:
         """Compute eastward wind component (m/s) at given position."""
         feats = self._feature_vec(x, y, h, ts)
-        if isinstance(x, (ca.SX, ca.MX, ca.DM)):
+        if isinstance(feats, list):
             expr = self._intercept[0]
             for c, f in zip(self._coef[0], feats):
                 expr = expr + c * f
@@ -152,7 +155,7 @@ class PolyWind:
     ) -> float | Symbolic:
         """Compute northward wind component (m/s) at given position."""
         feats = self._feature_vec(x, y, h, ts)
-        if isinstance(x, (ca.SX, ca.MX, ca.DM)):
+        if isinstance(feats, list):
             expr = self._intercept[1]
             for c, f in zip(self._coef[1], feats):
                 expr = expr + c * f

@@ -69,3 +69,21 @@ def test_polywind_numeric_matches_symbolic_evaluation(
     evaluated = f(x, y, h, ts)
     assert isinstance(evaluated, ca.DM)
     assert float(evaluated) == pytest.approx(float(calc(x, y, h, ts)), abs=1e-6)
+
+
+@pytest.mark.parametrize("component", ["calc_u", "calc_v"])
+@pytest.mark.parametrize("symbol_type", [ca.SX, ca.MX, ca.DM])
+def test_polywind_accepts_numeric_constants_with_casadi_input(
+    wind, component, symbol_type
+):
+    w, proj = wind
+    x, y = proj(5.0, 50.0)
+    calc = getattr(w, component)
+    expected = float(calc(x, y, 5000.0, 1800.0))
+    if symbol_type is ca.DM:
+        actual = calc(ca.DM(x), y, 5000.0, 1800.0)
+    else:
+        symbolic_x = symbol_type.sym("x")
+        expression = calc(symbolic_x, y, 5000.0, 1800.0)
+        actual = ca.Function("mixed_wind", [symbolic_x], [expression])(x)
+    assert float(actual) == pytest.approx(expected, abs=1e-6)

@@ -50,12 +50,13 @@ def obj_fuel(
     symbolic: bool = True,
     fuel_model: Any = None,
     **kwargs: Any,
-) -> ca.MX:
+) -> Any:
     """Fuel burn objective: fuelflow * dt.
 
     Symbolic path uses the CasADi ``fuelflow`` passed in; non-symbolic path
     reuses the resolved numeric ``fuel_model`` or builds the selected performance
     model so callers can evaluate the objective on solved numeric trajectories.
+    The result type follows the supplied fuel model and numeric/symbolic inputs.
     """
     _, _, h, m, _ = x[0], x[1], x[2], x[3], x[4]  # type: ignore[index]  # Symbolic includes float but x is always array-like
     mach, vs, _ = u[0], u[1], u[2]  # type: ignore[index]
@@ -78,7 +79,7 @@ def obj_fuel(
         v = openap.aero.mach2tas(mach, h, dT=dT)  # type: ignore[arg-type]
 
     ff = ff_model.enroute(m, v / kts, h / ft, vs / fpm, dT=dT)
-    return ff * dt  # type: ignore[return-value]  # casadi arithmetic result is MX at NLP time
+    return ff * dt
 
 
 def obj_time(x: Symbolic, u: Symbolic, dt: Symbolic, **kwargs: object) -> ca.MX:
@@ -95,7 +96,7 @@ def obj_ci(
     time_price: float = 25,
     fuel_price: float = 0.8,
     **kwargs: Any,
-) -> ca.MX:
+) -> Any:
     """Cost index objective blending time and fuel costs.
 
     Args:
@@ -112,7 +113,7 @@ def obj_ci(
     fuel_cost = fuel * (fuel_price / 0.82)
 
     obj = ci / 100 * time_cost + (1 - ci / 100) * fuel_cost
-    return obj  # type: ignore[return-value]  # arithmetic on Symbolic yields MX at NLP time
+    return obj
 
 
 # ---- Climate ----

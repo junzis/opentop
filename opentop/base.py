@@ -937,8 +937,9 @@ class Base:
             None if grid_expr is None else float(sol.value(grid_expr))
         )
         ts_final_val = float(sol.value(self.ts_final))
-        x_opt = sol.value(ca.horzcat(*X))
-        u_opt = sol.value(ca.horzcat(*U))
+        # CasADi types value() as float even for matrix-valued expressions.
+        x_opt = np.asarray(sol.value(ca.horzcat(*X)), dtype=float)
+        u_opt = np.asarray(sol.value(ca.horzcat(*U)), dtype=float)
 
         return self.to_trajectory(ts_final_val, x_opt, u_opt, **kwargs)
 
