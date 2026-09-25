@@ -47,3 +47,24 @@ def test_cruise_with_4d_grid_cost_converges(interp_4d):
     assert df is not None, "trajectory returned None"
     assert opt.success, f"solver failed: {opt.stats}"
     assert "grid_cost" in df.columns, "grid_cost column missing from trajectory"  # type: ignore[union-attr]  # trajectory() without result_object always returns DataFrame
+
+
+def test_reported_grid_cost_is_the_minimised_quadrature(interp_4d):
+    """Reported grid cost equals the physical objective minimized by IPOPT."""
+    opt = top.Cruise("A320", (52.362, 13.501), (40.472, -3.563), m0=0.85)
+    opt.setup(max_iter=800)
+
+    def pure_grid(x, u, dt, **kwargs):
+        return opt.obj_grid_cost(
+            x, u, dt, interpolant=kwargs["interpolant"], time_dependent=True
+        )
+
+    result = opt.trajectory(
+        objective=pure_grid,
+        interpolant=interp_4d,
+        time_dependent=True,
+        result_object=True,
+    )
+    assert result.success, f"solver failed: {result.status}"
+    assert result.grid_cost == pytest.approx(result.objective, rel=1e-6)
+    assert opt.grid_cost_value == pytest.approx(result.objective, rel=1e-6)

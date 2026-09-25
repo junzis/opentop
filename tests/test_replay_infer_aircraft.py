@@ -10,8 +10,7 @@ import pandas as pd
 from opentop import replay
 
 
-def test_infer_aircraft_returns_type_from_icao24():
-    traffic_data = pytest.importorskip("traffic.data")
+def test_infer_aircraft_returns_type_from_icao24(traffic_data):
     flight_df = pd.DataFrame({"icao24": ["4bb9b1"]})
 
     fake_lookup = MagicMock()
@@ -24,8 +23,7 @@ def test_infer_aircraft_returns_type_from_icao24():
     assert result == "B738"
 
 
-def test_infer_aircraft_returns_none_on_lookup_failure():
-    traffic_data = pytest.importorskip("traffic.data")
+def test_infer_aircraft_returns_none_on_lookup_failure(traffic_data):
     flight_df = pd.DataFrame({"icao24": ["ffffff"]})
 
     fake_lookup = MagicMock()

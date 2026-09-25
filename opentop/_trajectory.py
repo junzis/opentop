@@ -70,11 +70,7 @@ def to_dataframe(
     X = x_opt if isinstance(x_opt, np.ndarray) else x_opt.full()
     U = u_opt if isinstance(u_opt, np.ndarray) else u_opt.full()
 
-    # Accept historical interval-control arrays for callers replaying saved data.
-    # New solves already contain the independently optimized terminal control.
-    if U.shape[1] == nodes:
-        U = np.append(U, U[:, -1:], axis=1)
-    elif U.shape[1] != nodes + 1:
+    if U.shape[1] != nodes + 1:
         raise ValueError("controls must have nodes + 1 boundary columns")
     n = nodes + 1
 
@@ -97,8 +93,11 @@ def to_dataframe(
     # quadrature and disagree with the physical fuel burn.
     fuel_cost = np.append(-np.diff(mass), np.nan)
 
-    # Grid cost has no state-based equivalent; integrate left-endpoint
-    # over the N intervals and pad the terminal row with NaN.
+    # Grid cost has no state-based equivalent; integrate left-endpoint over the
+    # N intervals and pad the terminal row with NaN. This column is a per-node
+    # diagnostic and its sum is NOT the minimised objective -- the NLP uses the
+    # Legendre quadrature at the collocation points. Use
+    # Base.grid_cost_value / TrajectoryResult.grid_cost for that.
     if interpolant is not None:
         grid_cost_seg = np.asarray(
             _objectives.obj_grid_cost(

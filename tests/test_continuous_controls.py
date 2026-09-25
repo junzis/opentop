@@ -32,6 +32,10 @@ class Integrator(Base):
             [ca.vertcat(self.u[0], 0, 0, 0, 1), dt * self.u[0] ** 2],
         )
 
+        self.func_grid_cost = ca.Function(
+            "grid_cost", [self.x, self.u, dt], [dt * self.x[4] ** 2]
+        )
+
 
 @pytest.mark.parametrize("variable", [False, True])
 def test_linear_controls_integrate_dynamics_and_cost(variable):
@@ -69,6 +73,11 @@ def test_linear_controls_integrate_dynamics_and_cost(variable):
     residual, lower, upper = map(evaluate, [problem.g, problem.lbg, problem.ubg])
     assert np.max(np.maximum(lower - residual, residual - upper)) < 1e-10
     np.testing.assert_allclose(evaluate(t.objective_raw), cost, atol=1e-12)
+    # Integral of time squared on [0, 5] is 125/3. Boundary rectangle
+    # costs differ deterministically, independent of any solver's optimum.
+    np.testing.assert_allclose(evaluate(t.grid_cost_raw), 125 / 3, atol=1e-12)
+    rectangle = sum(dt * sum(durations[:k]) ** 2 for k, dt in enumerate(durations))
+    assert rectangle != pytest.approx(125 / 3)
     assert len(list(t.path_points())) == 9
     extra = [(0, 0.37), (1, 0.63)]
     points = list(t.path_points(extra))

@@ -51,7 +51,7 @@ def _setup(opt, **kwargs):
 def _solver_stats(opt):
     """Get (success, iterations) tuple, handling missing attributes."""
     try:
-        stats = opt.solver.stats()
+        stats = opt.stats if hasattr(opt, "stats") else opt.solver.stats()
         return bool(stats.get("success", False)), int(stats.get("iter_count", 0))
     except AttributeError:
         return None, None

@@ -1,8 +1,12 @@
 """Tests for the Climb trajectory optimizer."""
 
+from typing import cast
+
 import pytest
 
+import numpy as np
 import opentop as top
+import pandas as pd
 
 
 @pytest.fixture(scope="module")
@@ -16,27 +20,33 @@ def climb_optimizer(aircraft_type, medium_flight):
 
 
 @pytest.fixture(scope="module")
-def climb_clipped_df(climb_optimizer):
-    return climb_optimizer.trajectory(objective="fuel")
+def climb_clipped_df(climb_full_df):
+    return climb_full_df.query("vertical_rate > 100")
 
 
 @pytest.fixture(scope="module")
 def climb_full_df(climb_optimizer):
-    return climb_optimizer.trajectory(objective="fuel", remove_cruise=False)
+    df = climb_optimizer.trajectory(objective="fuel", remove_cruise=False)
+    assert climb_optimizer.success, climb_optimizer.stats
+    return df
 
 
 @pytest.fixture(scope="module")
 def climb_alt_stop_df(climb_optimizer):
-    return climb_optimizer.trajectory(
+    df = climb_optimizer.trajectory(
         objective="fuel", alt_stop=30000, remove_cruise=False
     )
+    assert climb_optimizer.success, climb_optimizer.stats
+    return df
 
 
 @pytest.fixture(scope="module")
 def climb_alt_stop_low_df(climb_optimizer):
-    return climb_optimizer.trajectory(
+    df = climb_optimizer.trajectory(
         objective="fuel", alt_stop=25000, remove_cruise=False
     )
+    assert climb_optimizer.success, climb_optimizer.stats
+    return df
 
 
 class TestClimb:
@@ -50,10 +60,6 @@ class TestClimb:
     def test_altitude_increases(self, climb_clipped_df):
         assert climb_clipped_df.altitude.iloc[-1] > climb_clipped_df.altitude.iloc[0]
 
-    def test_remove_cruise_clips(self, climb_clipped_df, climb_full_df):
-        assert len(climb_clipped_df) <= len(climb_full_df)
-        assert (climb_clipped_df.vertical_rate > 100).all()
-
     def test_remove_cruise_false_includes_cruise(self, climb_full_df):
         assert (climb_full_df.vertical_rate.abs() < 100).any()
 
@@ -63,9 +69,10 @@ class TestClimb:
     def test_alt_stop_vs_default(self, climb_full_df, climb_alt_stop_low_df):
         assert climb_alt_stop_low_df.altitude.max() < climb_full_df.altitude.max()
 
-    def test_heading_reasonable(self, climb_clipped_df):
-        df = climb_clipped_df
-        assert df.heading.max() - df.heading.min() < 30
+    def test_turn_rate_within_limit(self, climb_clipped_df):
+        heading = np.unwrap(np.deg2rad(climb_clipped_df.heading.to_numpy()))
+        turn_rate = np.diff(heading) / np.diff(climb_clipped_df.ts.to_numpy())
+        assert np.max(np.abs(turn_rate)) <= np.deg2rad(0.5) + 1e-6
 
     def test_mass_decreases(self, climb_clipped_df):
         df = climb_clipped_df
@@ -77,24 +84,44 @@ class TestClimb:
         assert (df["fuel_cost"].dropna() >= 0).all()
 
 
+@pytest.mark.parametrize("remove_cruise", [False, True])
+def test_remove_cruise_filters_threshold(monkeypatch, remove_cruise):
+    opt = top.Climb("A320", "EHAM", "EDDF", 0.85)
+    rates = [-101.0, -100.0, 0.0, 100.0, 101.0]
+    solved = pd.DataFrame({"vertical_rate": rates})
+    xp, yp = opt.proj(np.array([opt.lon1, opt.lon2]), np.array([opt.lat1, opt.lat2]))
+    cruise = pd.DataFrame(
+        {
+            "x": xp,
+            "y": yp,
+            "h": [9000.0] * 2,
+            "mach": [0.75] * 2,
+            "mass": [65000.0] * 2,
+        }
+    )
+    monkeypatch.setattr(opt, "_solve", lambda *args, **kwargs: solved)
+    result = opt.trajectory(df_cruise=cruise, remove_cruise=remove_cruise)
+    expected = solved.iloc[[4]] if remove_cruise else solved
+    pd.testing.assert_frame_equal(result, expected)
+
+
 def test_climb_north_south_route_converges():
-    """Regression: the colinearity constraint must handle near-vertical geometries.
-
-    Rewritten as cross-product, no division by (xp_2 - xp_1), so N-S routes
-    don't blow up.
-    """
-    import opentop as top
-
-    # Amsterdam → Copenhagen: bearing ~57°, i.e. mostly N; xp_2 - xp_1 is
-    # small relative to yp_2 - yp_1. Pre-fix this may still converge due to
-    # luck; this test is mainly a guard that future changes preserve the
-    # refactored constraint form.
-    opt = top.Cruise("A320", (52.308, 4.764), (55.618, 12.656), m0=0.85)
-    opt.setup(max_iter=800)
-    dfcr = opt.trajectory(objective="fuel")
-    assert dfcr is not None
-
-    clb = top.Climb("A320", (52.308, 4.764), (55.618, 12.656), m0=0.85)
-    clb.setup(max_iter=800)
-    dfcl = clb.trajectory(objective="fuel", df_cruise=dfcr)  # type: ignore[arg-type]  # trajectory() without result_object returns DataFrame
-    assert dfcl is not None
+    """Zero projected dx must work in the terminal collinearity constraint."""
+    opt = top.Climb("A320", (48.0, 5.0), (55.0, 5.0), m0=0.85)
+    xp, yp = opt.proj(np.array([5.0, 5.0]), np.array([48.0, 55.0]))
+    assert abs(xp[1] - xp[0]) < 1e-8
+    cruise = pd.DataFrame(
+        {
+            "x": xp,
+            "y": yp,
+            "h": [9000.0] * 2,
+            "mach": [0.75] * 2,
+        }
+    )
+    df = opt.trajectory(objective="fuel", df_cruise=cruise, remove_cruise=False)
+    assert opt.success, opt.stats
+    assert isinstance(df, pd.DataFrame)
+    df = cast(pd.DataFrame, df)
+    assert abs(df.x.iloc[-1] - xp[0]) < 1e-4
+    assert df.y.iloc[-1] > df.y.iloc[0]
+    assert df.h.iloc[-1] == pytest.approx(9000.0, abs=1e-3)

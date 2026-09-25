@@ -89,7 +89,7 @@ def run_opt(
     df = optimizer.trajectory(**traj_kwargs)
     elapsed = time.time() - t0
 
-    stats = optimizer.solver.stats()
+    stats = optimizer.stats
     obj_val = optimizer.objective_value
     return df, elapsed, stats, obj_val
 

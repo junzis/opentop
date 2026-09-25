@@ -1,40 +1,11 @@
-"""Structured options for trajectory optimization and result packaging.
-
-These dataclasses replace the **kwargs dict plumbing in Base.trajectory.
-"""
+"""Structured trajectory results and packaging helpers."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
-
-import casadi as ca
+from typing import Any
 
 import pandas as pd
-
-
-@dataclass(frozen=True, slots=True)
-class SolveOptions:
-    """Options consumed by Base._run / Base._build_opti / Base._solve."""
-
-    max_iter: int = 1500
-    max_fuel: Optional[float] = None
-    auto_rescale_objective: bool = True
-    return_failed: bool = False
-    initial_guess: Optional[pd.DataFrame] = None
-    alt_start: Optional[float] = None
-    alt_stop: Optional[float] = None
-    remove_cruise: bool = False
-    exact_hessian: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class GridOptions:
-    """Options for grid-cost objectives."""
-
-    interpolant: Optional[ca.Function] = None
-    n_dim: int = 3
-    time_dependent: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +25,10 @@ class TrajectoryResult:
 
 
 def build_result(
-    df: pd.DataFrame | None, stats: dict, objective: float
+    df: pd.DataFrame | None,
+    stats: dict,
+    objective: float,
+    exact_grid_cost: float | None = None,
 ) -> TrajectoryResult:
     """Package a DataFrame + solver stats + objective into a TrajectoryResult.
 
@@ -73,11 +47,15 @@ def build_result(
         and "grid_cost" in result_df.columns
         and bool(result_df["grid_cost"].notna().any())
     )
-    grid_cost = (
-        float(result_df["grid_cost"].sum(skipna=True))
-        if has_grid_cost
-        else float("nan")
-    )
+    # Prefer the solver's own collocation quadrature when the solve recorded
+    # one. Summing the per-node column is a left-endpoint rectangle rule and is
+    # not the quantity IPOPT minimised.
+    if exact_grid_cost is not None:
+        grid_cost = float(exact_grid_cost)
+    elif has_grid_cost:
+        grid_cost = float(result_df["grid_cost"].sum(skipna=True))
+    else:
+        grid_cost = float("nan")
     return TrajectoryResult(
         df=result_df,
         success=bool(stats.get("success", False)),

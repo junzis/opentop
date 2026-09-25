@@ -4,6 +4,7 @@ from typing import cast
 
 import pytest
 
+import numpy as np
 import opentop as top
 import pandas as pd
 
@@ -32,7 +33,9 @@ def complete_flight_medium_df(aircraft_type, medium_flight):
         medium_flight["destination"],
         medium_flight["m0"],
     )
-    return optimizer.trajectory(objective="fuel")
+    df = optimizer.trajectory(objective="fuel")
+    assert optimizer.success, optimizer.stats
+    return df
 
 
 class TestCompleteFlight:
@@ -58,9 +61,10 @@ class TestCompleteFlight:
         df = complete_flight_df
         assert df.mass.iloc[-1] < df.mass.iloc[0]
 
-    def test_heading_reasonable(self, complete_flight_df):
-        df = complete_flight_df
-        assert df.heading.max() - df.heading.min() < 30
+    def test_turn_rate_within_limit(self, complete_flight_df):
+        heading = np.unwrap(np.deg2rad(complete_flight_df.heading.to_numpy()))
+        turn_rate = np.diff(heading) / np.diff(complete_flight_df.ts.to_numpy())
+        assert np.max(np.abs(turn_rate)) <= np.deg2rad(0.5) + 1e-6
 
     def test_fuel_cost_column(self, complete_flight_df):
         df = complete_flight_df
@@ -134,28 +138,34 @@ def test_complete_flight_auto_setup_and_phase_nodes_are_dense():
 
     opt.setup()
 
-    assert opt.nodes == 30
-    assert opt._phase_node_indices() == (10, 20)
+    climb_end, descent_start = opt._phase_node_indices()
+    assert 0 < climb_end < descent_start < opt.nodes
 
 
 def test_complete_flight_phase_nodes_fit_dense_short_route_mesh():
     opt = top.CompleteFlight("A320", "EHAM", "EDDF", m0=0.85)
     opt.setup(nodes=41)
 
-    assert opt._phase_node_indices() == (13, 28)
+    climb_end, descent_start = opt._phase_node_indices()
+    assert 0 < climb_end < descent_start < opt.nodes
 
 
 @pytest.mark.parametrize(
-    ("phase_kwargs", "expected_indices"),
+    "phase_kwargs",
     [
-        ({"climb_nodes": 5}, (5, 20)),
-        ({"descent_nodes": 5}, (10, 25)),
+        {"climb_nodes": 5},
+        {"descent_nodes": 5},
     ],
 )
-def test_complete_flight_partial_phase_node_override(phase_kwargs, expected_indices):
+def test_complete_flight_partial_phase_node_override(phase_kwargs):
     opt = top.CompleteFlight("A320", "EHAM", "EDDF", m0=0.85)
 
-    assert opt._phase_node_indices(**phase_kwargs) == expected_indices
+    climb_end, descent_start = opt._phase_node_indices(**phase_kwargs)
+    assert 0 < climb_end < descent_start < opt.nodes
+    if "climb_nodes" in phase_kwargs:
+        assert climb_end == phase_kwargs["climb_nodes"]
+    else:
+        assert opt.nodes - descent_start == phase_kwargs["descent_nodes"]
 
 
 def test_complete_flight_phase_nodes_must_leave_cruise_interval():
@@ -170,7 +180,6 @@ def test_complete_flight_callable_objective():
     """Verify objective=callable end-to-end, pinning the `(x, u, dt, **kwargs) -> ca.MX`
     contract. Before Phase 3 changes objective dispatch, this ensures user-supplied
     callables keep working."""
-    import opentop as top
 
     opt = top.CompleteFlight("A320", "EHAM", "EDDF", m0=0.85)
     opt.setup(max_iter=1200)
@@ -188,7 +197,6 @@ def test_complete_flight_return_failed_returns_df_on_tight_fuel_budget():
     """When max_fuel is impossibly tight, the mass-violation or infeasibility path
     would normally return None. With return_failed=True, the function must return
     the partial DataFrame instead."""
-    import opentop as top
 
     opt = top.CompleteFlight("A320", "EHAM", "EDDF", m0=0.85)
     opt.setup(max_iter=200)

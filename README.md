@@ -116,6 +116,31 @@ opt.fix_track_angle()
 flight = opt.trajectory()
 ```
 
+To hold the cruise at a specific Mach number instead, pass `mach_value`:
+
+```python
+flight = opentop.Cruise("A320", "EHAM", "LGAV", m0=0.85, mach_value=0.78).trajectory()
+```
+
+To follow a recorded cruise ground track while optimizing altitude and speed:
+
+```python
+opt = opentop.Cruise("A320", "EHAM", "EDDF", m0=0.85, mach_value=0.78)
+opt.follow_track(recorded.latitude, recorded.longitude, tolerance_m=1000)
+flight = opt.trajectory()
+```
+
+The reference is a cubic spline through at least four finite latitude/longitude
+points, with no consecutive duplicates. Its endpoints must be within 1 km of the
+flight endpoints and are snapped to them. Boundary nodes lie on the spline;
+interior collocation and quarter-interval samples stay within `tolerance_m`
+(default 1 km). This is a sampled constraint, not a continuous-path guarantee.
+Sharper bends or tighter tolerances may require more nodes via `opt.setup(nodes=...)`.
+Turn-rate limits remain active, so an infeasible recorded turn can prevent convergence.
+Check `opt.success` after solving. `follow_track` cannot be combined with
+`fix_track_angle`; fixed Mach, wind, and fleet optimization remain supported
+(subject to the existing fleet restrictions on wind and time-dependent grids).
+
 ### Multiple-aircraft separation optimization
 
 `MultiAircraft` formulates several cruise trajectories in one CasADi Opti
@@ -364,8 +389,6 @@ result = optimizer.trajectory(objective="fuel", result_object=True)
 # result.iters, result.fuel, result.grid_cost, result.stats
 ```
 
-`optimizer.solver` still works in v2.2 with a `DeprecationWarning`; it will be removed in v2.3.
-
 ## Benchmarks
 
 Run benchmarks across versions to verify performance:
@@ -400,9 +423,7 @@ Internally, `opentop/` has been split into focused modules: `_dynamics.py`, `_ob
 full = opentop.CompleteFlight("A320", "EHAM", "LGAV", m0=0.85).trajectory()
 ```
 
-`optimizer.solver` still works in v2.2 with a `DeprecationWarning`. It will be removed in v2.3 — prefer `optimizer.stats` / `optimizer.success`.
-
-Type annotations are now enforced in CI via pyright (basic mode). Public API signatures are fully annotated; see `opentop/_options.py` for the new `SolveOptions`, `GridOptions`, and `TrajectoryResult` dataclasses.
+Type annotations are now enforced in CI via pyright (basic mode). Public API signatures are fully annotated; see `opentop/_options.py` for the `TrajectoryResult` dataclass.
 
 ## What's New in 2.0
 
@@ -415,7 +436,7 @@ Version 2.0 is a major refactor. Most user code keeps the same shape, but a few 
 | `top.Cruise(...)` | `opentop.Cruise(...)` |
 | `optimizer.change_engine()` dropped | `opentop.Cruise(..., engine="CFM56-5B4")` |
 | `optimizer.solution["f"]` | `optimizer.objective_value` |
-| `optimizer.solver` was a `ca.nlpsol` callable | now a `ca.OptiSol` object |
+| `optimizer.solver` was a `ca.nlpsol` callable | use `optimizer.stats` and `optimizer.success` |
 | `setup(max_iteration=...)` | `setup(max_iter=...)` |
 | — | new CLI: `opentop optimize ORIGIN DEST ...` and `opentop gengrid ...` |
 | — | new `opentop.tools.cached_interpolant_from_dataframe()` for disk-cached bspline interpolants |

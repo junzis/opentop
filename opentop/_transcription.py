@@ -32,6 +32,7 @@ class AircraftTranscription:
     objective_kwargs: dict[str, Any]
     collocation_roots: tuple[float, ...]
     projection_center: tuple[float, float] | None = None
+    grid_cost_raw: Any = None
 
     def control_at(self, interval: int, tau: float) -> Any:
         """Continuous, piecewise-linear control at local interval time tau."""
