@@ -461,3 +461,67 @@ def test_neural_phase_and_preliminary_cruise_use_same_model(fuel, phase):
     np.testing.assert_allclose(
         df.fuelflow, fuel.enroute(df.mass, df.tas, df.altitude, df.vertical_rate)
     )
+
+
+@pytest.mark.parametrize(
+    "left,right,accepted",
+    [
+        ("A320-214", "A320-232", False),
+        ("A320-214", "a320-214", True),
+        ("A320", "A320", True),
+        ("A320", "A320-214", True),
+    ],
+)
+def test_wave_pair_variant_metadata_without_engine_names(fuel, left, right, accepted):
+    # BADA-style metadata exposes the variant in ac, without engine names.
+    wave, no_wave = SyntheticPhysics(), SyntheticPhysics(wave=False)
+    wave.ac, no_wave.ac = left, right
+    if not accepted:
+        with pytest.raises(ValueError, match="same variant"):
+            top.PhysicsCorrectedFuelFlow(
+                fuel, wave, method="wave_increment", wave_free_model=no_wave
+            )
+    else:
+        corrected = top.PhysicsCorrectedFuelFlow(
+            fuel, wave, method="wave_increment", wave_free_model=no_wave
+        )
+        assert np.isfinite(corrected.enroute(62000, 450, 32000))
+
+
+def test_imported_sigmoid_values_and_derivatives_at_saturation(tmp_path):
+    from opentop.neural import _import_acropole
+
+    # Isolate the output activation so ReLU cannot hide negative logits.
+    graph = onnx.helper.make_graph(
+        [
+            onnx.helper.make_node("MatMul", ["inputs", "weights"], ["logit"]),
+            onnx.helper.make_node("Sigmoid", ["logit"], ["output"]),
+        ],
+        "sigmoid_saturation",
+        [onnx.helper.make_tensor_value_info("inputs", onnx.TensorProto.FLOAT, [1, 12])],
+        [onnx.helper.make_tensor_value_info("output", onnx.TensorProto.FLOAT, [1, 1])],
+        [onnx.numpy_helper.from_array(np.ones((12, 1), dtype=np.float32), "weights")],
+    )
+    path = tmp_path / "sigmoid.onnx"
+    onnx.save(
+        onnx.helper.make_model(graph, opset_imports=[onnx.helper.make_opsetid("", 13)]),
+        path,
+    )
+    network = _import_acropole(path)
+    z = ca.MX.sym("z")
+    value = network(ca.repmat(z / 12, 1, 12))
+    evaluate = ca.Function(
+        "sigmoid_derivatives",
+        [z],
+        [value, ca.jacobian(value, z), ca.hessian(value, z)[0]],
+    )
+    for point in [-1e4, -800, -710, -100, -20, -2, -1e-6, 0, 1e-6, 2, 20, 710, 1e4]:
+        actual = np.asarray(evaluate(point)).ravel()
+        tail = np.exp(-abs(point))
+        expected = 1 / (1 + tail) if point >= 0 else tail / (1 + tail)
+        gradient = expected * (1 - expected)
+        hessian = gradient * (1 - 2 * expected)
+        assert np.isfinite(actual).all()
+        np.testing.assert_allclose(
+            actual, [expected, gradient, hessian], rtol=1e-7, atol=1e-15
+        )

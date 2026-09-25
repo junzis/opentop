@@ -108,15 +108,21 @@ def _import_acropole(path: Path, activation_smoothing: float = 0.0) -> Any:
                     ]
                 )
         else:
-            neg, exp, den = [
-                fresh(f"opentop_{s}_{index}") for s in ("neg", "exp", "den")
+            # sigmoid(z) = (1 + tanh(z / 2)) / 2 avoids exp(-z)
+            # overflow and keeps first/second derivatives finite at saturation.
+            half = fresh(f"sigmoid_half_{index}")
+            model.graph.initializer.append(
+                numpy_helper.from_array(np.array(0.5, dtype=np.float32), half)
+            )
+            scaled, tangent, shifted = [
+                fresh(f"opentop_{s}_{index}") for s in ("scaled", "tangent", "shifted")
             ]
             nodes.extend(
                 [
-                    helper.make_node("Neg", [node.input[0]], [neg]),
-                    helper.make_node("Exp", [neg], [exp]),
-                    helper.make_node("Add", [constant, exp], [den]),
-                    helper.make_node("Div", [constant, den], node.output),
+                    helper.make_node("Mul", [node.input[0], half], [scaled]),
+                    helper.make_node("Tanh", [scaled], [tangent]),
+                    helper.make_node("Add", [constant, tangent], [shifted]),
+                    helper.make_node("Mul", [half, shifted], node.output),
                 ]
             )
     del model.graph.node[:]
@@ -294,16 +300,29 @@ class PhysicsCorrectedFuelFlow:
                 "wave_increment requires wave_free_model and no reference_mach."
             )
 
+        aircraft_ids = []
         for label, model in (
             ("physics_model", physics_model),
             ("wave_free_model", wave_free_model),
         ):
             aircraft = getattr(model, "actype", getattr(model, "ac", None))
+            aircraft_ids.append(aircraft.upper() if isinstance(aircraft, str) else None)
             if isinstance(aircraft, str) and (
                 aircraft.upper().split("-", 1)[0] != neural.actype
             ):
                 raise ValueError(f"{label} aircraft must match the neural model.")
         if method == "wave_increment":
+            # The neural model identifies an aircraft family, but the two
+            # physical models must describe the same variant when specified.
+            if (
+                all(aircraft_ids)
+                and all(
+                    aircraft is not None and "-" in aircraft
+                    for aircraft in aircraft_ids
+                )
+                and aircraft_ids[0] != aircraft_ids[1]
+            ):
+                raise ValueError("Wave correction models must use the same variant.")
             engines = []
             for model in (physics_model, wave_free_model):
                 engine = getattr(model, "engine", None)

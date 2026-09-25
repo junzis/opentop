@@ -30,8 +30,10 @@ Upstream sources:
 Acropole already ships a dense ONNX network with four ReLU hidden activations
 and a sigmoid output. The tested CasADi 3.8.1 Python wheel imports the affine
 layers but rejects `Relu` and `Sigmoid`. The adapter rewrites these operators in
-a temporary ONNX file as `Max(x, 0)` and `1 / (1 + Exp(-x))`, fixes the batch
-dimension to one, and calls `GraphBuilder.create(..., {"symbolic": True})`.
+a temporary ONNX file as `Max(x, 0)` and `(1 + Tanh(x / 2)) / 2`, fixes the
+batch dimension to one, and calls `GraphBuilder.create(..., {"symbolic": True})`.
+The sigmoid identity avoids exponential overflow and NaN derivatives at large
+negative inputs. Floating-point saturation may round very small outputs to zero.
 By default, weights and activations remain unchanged; no retraining, smoothing,
 finite-difference callback, or ONNX Runtime dependency is used in the optimizer.
 An explicit `activation_smoothing=epsilon` replaces ReLU by
@@ -490,7 +492,8 @@ already supplied to a correction. BADA performance data determine their own
 engine variant. Build a new optimizer/model for a different configuration.
 
 Correction constructors reject mismatched aircraft and, for a wave-model pair,
-mismatched engines when the models expose this metadata. Exposed wave-drag
+mismatched engines or explicit aircraft variants when the models expose this
+metadata. A family-level identifier alone does not establish the variant. Exposed wave-drag
 settings must be enabled/disabled in the respective models. Custom models without
 metadata are supported, but the caller must ensure they use the same aircraft,
 engine, units, and settings other than wave drag. A correction can intentionally
