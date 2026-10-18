@@ -2,7 +2,8 @@
 
 Run this script from the repository root after placing the source export under
 ``tmp/rad_data``.  The generated files preserve source records verbatim while
-retaining only the union of five diverse EHAM-LIRF routes at odd flight levels.
+retaining the union of five diverse EHAM-LIRF routes at odd flight levels,
+plus reference airports and city-pair caps for the altitude example.
 """
 
 from __future__ import annotations
@@ -20,10 +21,33 @@ OUTPUT = Path(__file__).resolve().parent
 NNPT_SOURCE = SOURCE / "NavPoint_2406.nnpt"
 ASE_SOURCE = SOURCE / "VST_2406.ase"
 ARP_SOURCE = SOURCE / "VST_2406_Airports.arp"
+FLC_SOURCE = SOURCE / "VST_2406_FLConstraints.flc2"
+ALTITUDE_RULE_IDS = ("03_EB4012", "03_EB4014", "03_LF4137")
+EXAMPLE_AIRPORTS = {"EHAM", "LIRF", "EBBR", "EDDK", "LFLC"}
 
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_altitude_excerpt() -> tuple[rad.RadRule, ...]:
+    """Copy the demonstrated city-pair caps with their source comments."""
+    rules = rad.read_flc2_rules(FLC_SOURCE).records
+    selected = tuple(rule for rule in rules if rule.rule_id in ALTITUDE_RULE_IDS)
+    if {rule.rule_id for rule in selected} != set(ALTITUDE_RULE_IDS):
+        raise ValueError("source export is missing an example altitude rule")
+    source_lines = FLC_SOURCE.read_text(encoding="cp1252").splitlines()
+    output = ["#SECTION_1 City Pair Level Capping (RAD ANNEX 2A)", ""]
+    for rule in selected:
+        action_index = rule.provenance.line_number - 1
+        comment = source_lines[action_index - 1]
+        if not comment.lstrip().startswith(f"#RAD {rule.rule_id} - "):
+            raise ValueError(f"missing source comment for {rule.rule_id}")
+        output.extend((comment, source_lines[action_index], ""))
+    (OUTPUT / "airac2406_city_pair_caps.flc2").write_text(
+        "\n".join(output), encoding="utf-8"
+    )
+    return selected
 
 
 def main() -> None:
@@ -95,7 +119,7 @@ def main() -> None:
         point for point in navpoints if point.point_id in selected_point_ids
     ]
     selected_airports = [
-        airport for airport in airports if airport.icao in {"EHAM", "LIRF"}
+        airport for airport in airports if airport.icao in EXAMPLE_AIRPORTS
     ]
 
     nnpt_lines = [str(len(selected_points))] + [
@@ -116,6 +140,7 @@ def main() -> None:
         encoding="utf-8",
     )
 
+    altitude_rules = write_altitude_excerpt()
     manifest = {
         "airac_cycle": "2406",
         "case": "EHAM-LIRF at FL350",
@@ -123,6 +148,11 @@ def main() -> None:
             NNPT_SOURCE.name: sha256(NNPT_SOURCE),
             ASE_SOURCE.name: sha256(ASE_SOURCE),
             ARP_SOURCE.name: sha256(ARP_SOURCE),
+        },
+        "altitude_rules": {
+            "source_file": FLC_SOURCE.name,
+            "rule_ids": [rule.rule_id for rule in altitude_rules],
+            "scope": "selected city-pair upper limits",
         },
         "selection": {
             "orientation": "odd",
@@ -135,6 +165,7 @@ def main() -> None:
             "navpoints": len(selected_points),
             "segments": len(selected_segments),
             "airports": len(selected_airports),
+            "city_pair_caps": len(altitude_rules),
         },
     }
     (OUTPUT / "manifest.json").write_text(

@@ -224,3 +224,21 @@ def test_cruise_fuel_optimization_with_bada_model(actype, performance_model, bad
     assert df.fuelflow.to_numpy().reshape(-1) == pytest.approx(
         np.asarray(expected_fuelflow).reshape(-1)
     )
+
+
+@pytest.mark.parametrize("phase", [top.CompleteFlight, top.Cruise])
+@pytest.mark.parametrize(
+    "model, actype, data_path",
+    [
+        pytest.param("bada3", "A320", BADA3_PATH, marks=requires_bada3),
+        pytest.param("bada4", "A320-214", BADA4_PATH, marks=requires_bada4),
+    ],
+)
+def test_bada_city_pair_altitude_ceiling(phase, model, actype, data_path):
+    opt = phase(
+        actype, "EBBR", "EDDK", m0=60000, performance_model=model, bada_path=data_path
+    )
+    opt.setup(nodes=20, ipopt_kwargs={"max_cpu_time": 45})
+    result = opt.trajectory(h_max=12500 * ft, result_object=True)
+    assert result.success, result.status
+    assert result.df.altitude.max() <= 12500.1

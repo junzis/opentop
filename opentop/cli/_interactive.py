@@ -41,7 +41,7 @@ def run_wizard() -> Optional[dict[str, Any]]:
     aircraft_in = _prompt_with_default("Aircraft [auto-detect]", "").strip()
     aircraft: Optional[str] = aircraft_in or None
 
-    m0 = float(_prompt_with_default("Initial mass ratio m0", "0.85"))
+    m0 = float(_prompt_with_default("Initial mass m0 [kg or MTOW fraction]", "0.85"))
     phase = _prompt_with_default("Phase [all/cruise/climb/descent]", "all")
     objective = _prompt_with_default("Objective", "fuel")
 

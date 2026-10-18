@@ -3,6 +3,7 @@ from __future__ import annotations
 import warnings
 from functools import cached_property
 from itertools import pairwise
+from math import pi
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 import casadi as ca
@@ -78,7 +79,8 @@ class Base:
             origin (str | LatLon): ICAO or IATA code of airport, or tuple (lat, lon)
             destination (str | LatLon): ICAO or IATA code of airport, or tuple
                 (lat, lon)
-            m0 (float, optional): Takeoff mass factor. Defaults to 0.85 (of MTOW).
+            m0 (float, optional): Initial mass in kg or an MTOW fraction in
+                (0, 1]. Defaults to 0.85. Mass above MTOW raises ValueError.
             engine (str | None, optional): Engine type. Defaults to aircraft's default
                 engine.
             use_synonym (bool, optional): Use aircraft type synonym. Defaults to False.
@@ -132,10 +134,15 @@ class Base:
         self.fuel_max = self.aircraft["mfc"]
         self.payload = payload
         self.mass_min = self._mass_min(payload)
-        self.mass_init_lb, self.mass_init_ub = self._mass_init_bounds(m0)
-        self.mass_init = min(
-            max(m0 * self.aircraft["mtow"], self.mass_init_lb), self.mass_init_ub
-        )
+        if not np.isfinite(m0) or m0 <= 0:
+            raise ValueError("m0 must be finite and positive")
+        mass_guess = float(m0 * self.aircraft["mtow"] if m0 <= 1 else m0)
+        if mass_guess > self.aircraft["mtow"]:
+            raise ValueError("initial mass must not exceed MTOW")
+        if payload is None and mass_guess < self.mass_min:
+            raise ValueError("initial mass must not be below OEW + payload")
+        self.mass_init_lb, self.mass_init_ub = self._mass_init_bounds(mass_guess)
+        self.mass_init = min(max(mass_guess, self.mass_init_lb), self.mass_init_ub)
         if payload is not None:
             warnings.warn(
                 "payload is provided; m0 is used only as the initial mass guess "
@@ -192,9 +199,8 @@ class Base:
             raise ValueError("OEW + payload must not exceed MTOW")
         return mass_min
 
-    def _mass_init_bounds(self, m0: float) -> tuple[float, float]:
-        """Initial-mass bounds; fixed unless payload optimization is enabled."""
-        mass_guess = m0 * self.aircraft["mtow"]
+    def _mass_init_bounds(self, mass_guess: float) -> tuple[float, float]:
+        """Initial-mass bounds in kg; fixed unless payload is supplied."""
         if self.payload is None:
             return mass_guess, mass_guess
 
@@ -319,7 +325,9 @@ class Base:
         Args:
             flight: Existing trajectory to use as initial guess.
                 If None, uses straight-line interpolation at cruise altitude.
-                The NLP also uses an optional mach column to initialize controls.
+                Optional mach, vertical_rate (ft/min), and heading (degrees)
+                columns initialize controls. Supplied times initialize duration
+                and variable interval lengths, clipped to the configured bounds.
 
         Returns:
             np.ndarray: Array of shape (nodes+1, 5) with columns
@@ -639,18 +647,34 @@ class Base:
                 state_guess[0, 4], state_guess[0, 4] + ts_final_guess, self.nodes + 1
             )
 
-        # A supplied Mach profile must reach the control variables, not just states.
+        # Warm starts must seed controls and time variables as well as states.
         initial_flight = kwargs.get("initial_guess")
-        mach_guess = None
-        if initial_flight is not None and "mach" in initial_flight:
-            mach_guess = np.asarray(initial_flight["mach"], dtype=float)
-            if (
-                mach_guess.shape != (self.nodes + 1,)
-                or not np.isfinite(mach_guess).all()
+        control_guesses = {}
+        supplied_dts = None
+        if initial_flight is not None:
+            for column, index, factor in (
+                ("mach", 0, 1.0),
+                ("vertical_rate", 1, fpm),
+                ("heading", 2, pi / 180),
             ):
-                raise ValueError(
-                    "initial_guess mach must contain nodes + 1 finite values"
-                )
+                if column not in initial_flight:
+                    continue
+                values = np.asarray(initial_flight[column], dtype=float) * factor
+                if values.shape != (self.nodes + 1,) or not np.isfinite(values).all():
+                    raise ValueError(
+                        f"initial_guess {column} must contain nodes + 1 finite values"
+                    )
+                if column == "heading":
+                    psi = self.u_guess[2]
+                    values = psi + (values - psi + pi) % (2 * pi) - pi
+                control_guesses[index] = values
+            if "ts" in initial_flight or "timestamp" in initial_flight:
+                supplied_dts = np.diff(state_guess[:, 4])
+                if not np.isfinite(supplied_dts).all() or (supplied_dts <= 0).any():
+                    raise ValueError(
+                        "initial_guess times must be finite and increasing"
+                    )
+                self._opti.set_initial(self.ts_final, float(supplied_dts.sum()))
 
         # Initial state
         Xk = self._opti.variable(nstates)
@@ -670,10 +694,11 @@ class Base:
                 u_lb, u_ub = self.u_lb, self.u_ub
             self._opti.subject_to(self._opti.bounded(u_lb, Uk, u_ub))  # type: ignore[arg-type]  # CasADi stubs reject valid list bounds
             control_guess = np.array(self.u_guess, dtype=float, copy=True)
-            if mach_guess is not None:
-                control_guess[0] = np.clip(mach_guess[k], u_lb[0], u_ub[0])
+            for index, values in control_guesses.items():
+                control_guess[index] = np.clip(values[k], u_lb[index], u_ub[index])
             self._opti.set_initial(Uk, control_guess)
 
+        interval_duration_guess = 0.0
         for k in range(self.nodes):
             if variable_timestep:
                 interval_dt = self._opti.variable()
@@ -683,7 +708,10 @@ class Base:
                     dt_max=kwargs.get("dt_max"),
                 )
                 self._opti.subject_to(self._opti.bounded(dt_min, interval_dt, dt_max))  # type: ignore[arg-type]  # CasADi stubs wrong
+                if supplied_dts is not None:
+                    interval_guess = float(np.clip(supplied_dts[k], dt_min, dt_max))
                 self._opti.set_initial(interval_dt, interval_guess)
+                interval_duration_guess += interval_guess
                 self._interval_dts.append(interval_dt)
             else:
                 interval_dt = self.dt
@@ -733,6 +761,8 @@ class Base:
             self._opti.subject_to(Xk_end == Xk)
 
         if variable_timestep:
+            if supplied_dts is not None:
+                self._opti.set_initial(self.ts_final, interval_duration_guess)
             self._opti.subject_to(
                 ca.sum1(ca.vertcat(*self._interval_dts)) == self.ts_final
             )
@@ -766,7 +796,7 @@ class Base:
         if minimize:
             self._opti.minimize(objective_scaled)
 
-        return AircraftTranscription(
+        transcription = AircraftTranscription(
             optimizer=self,
             opti=opti,
             X=X,
@@ -786,6 +816,9 @@ class Base:
             projection_center=getattr(self, "_projection_center", None),
             collocation_roots=tuple(roots),
         )
+        if kwargs.get("h_max") is not None:
+            transcription.constrain_altitude_ceiling(float(self.x_ub[2]))
+        return transcription
 
     def _interval_dt(self, k: int) -> Any:
         if getattr(self, "_variable_timestep", False):
@@ -832,6 +865,62 @@ class Base:
                 raise ValueError(f"waypoint longitude out of range: {lon}")
             normalized.append((lat, lon))
         return normalized
+
+    def _filter_waypoints(
+        self,
+        waypoints: list[LatLon] | None,
+        waypoint_node_indices: list[int] | None,
+        minimum_spacing_m: float,
+    ) -> tuple[list[LatLon] | None, list[int] | None]:
+        """Thin ordered constraints using projected distance, preserving endpoints.
+
+        Retain the first point at least the requested distance from the last
+        retained point. Remove trailing points too close to the destination.
+        The dynamics mesh and explicit node assignments remain unchanged.
+        """
+        if not np.isfinite(minimum_spacing_m) or minimum_spacing_m < 0:
+            raise ValueError("waypoint_min_spacing_m must be finite and nonnegative")
+        original = self._normalize_waypoints(waypoints)
+        # Validate all explicit assignments before thinning can hide an error.
+        if waypoint_node_indices is not None:
+            if not original and waypoint_node_indices:
+                raise ValueError("waypoint_node_indices must match number of waypoints")
+            self._waypoint_node_indices(original, waypoint_node_indices)
+        retained = list(range(len(original)))
+        if minimum_spacing_m > 0:
+            retained = []
+            previous = self.proj(self.lon1, self.lat1)
+            positions = [self.proj(lon, lat) for lat, lon in original]
+            for i, position in enumerate(positions):
+                if (
+                    np.hypot(position[0] - previous[0], position[1] - previous[1])
+                    >= minimum_spacing_m
+                ):
+                    retained.append(i)
+                    previous = position
+            destination = self.proj(self.lon2, self.lat2)
+            while retained:
+                position = positions[retained[-1]]
+                if (
+                    np.hypot(position[0] - destination[0], position[1] - destination[1])
+                    >= minimum_spacing_m
+                ):
+                    break
+                retained.pop()
+        filtered = [original[i] for i in retained]
+        indices = (
+            [waypoint_node_indices[i] for i in retained]
+            if waypoint_node_indices is not None
+            else None
+        )
+        self.active_waypoints = filtered
+        self.active_waypoint_node_indices = indices
+        retained_set = set(retained)
+        self.skipped_waypoints = [
+            p for i, p in enumerate(original) if i not in retained_set
+        ]
+        self.retained_waypoint_positions = retained
+        return (filtered if waypoints is not None else None), indices
 
     def _waypoint_node_indices(
         self, waypoints: list[LatLon], waypoint_node_indices: Any = None

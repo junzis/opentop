@@ -151,6 +151,15 @@ class Cruise(Base):
             "h_min", self.h_min if self.h_min is not None else 15_000 * ft
         )
 
+        if not (np.isfinite(h_min) and np.isfinite(h_max) and 0 < h_max):
+            raise ValueError("altitude bounds must be finite with h_max > 0")
+        h_max = min(h_max, self.aircraft["limits"]["ceiling"])
+        if "h_min" not in kwargs and self.h_min is None:
+            if h_min > h_max:
+                h_min = min(100 * ft, h_max)
+        if h_min > h_max:
+            raise ValueError("h_min must not exceed h_max")
+
         psi = self._compute_bearing_psi()
 
         # Initial conditions - Lower upper bounds
@@ -257,6 +266,8 @@ class Cruise(Base):
             init_kwargs["h_min"] = h_min
         if h_max is not None:
             init_kwargs["h_max"] = h_max
+        if h_max is not None or self.h_max is not None:
+            kwargs["h_max"] = h_max if h_max is not None else self.h_max
         self.init_conditions(**init_kwargs)
 
         transcription = self._add_transcription(
@@ -367,6 +378,7 @@ class Cruise(Base):
         exact_hessian: bool = False,
         waypoints: list[LatLon] | None = None,
         waypoint_tolerance_m: float = 2_000.0,
+        waypoint_min_spacing_m: float = 0.0,
         waypoint_node_indices: list[int] | None = None,
         variable_timestep: bool | None = None,
         dt_min: float | None = None,
@@ -393,6 +405,13 @@ class Cruise(Base):
             exact_hessian: Force IPOPT exact Hessian. Default False.
             waypoints: Ordered waypoint list as (lat, lon) pairs.
             waypoint_tolerance_m: Maximum waypoint miss distance in meters.
+            waypoint_min_spacing_m: Skip waypoints closer than this projected
+                distance to the last retained point or a flight endpoint, before
+                constructing the problem. Default 0 disables thinning. This
+                relaxes the supplied route constraints; mandatory fixes must
+                not be thinned. The dynamics mesh is unchanged. Retained and
+                skipped points are available as active_waypoints and
+                skipped_waypoints on the optimizer.
             waypoint_node_indices: Optional interior node indices assigned to
                 waypoints. Defaults to evenly spaced ordered interior nodes.
             variable_timestep: Optimize interval durations. Defaults to True
@@ -408,6 +427,9 @@ class Cruise(Base):
         Returns:
             pd.DataFrame (or TrajectoryResult if result_object=True).
         """
+        waypoints, waypoint_node_indices = self._filter_waypoints(
+            waypoints, waypoint_node_indices, waypoint_min_spacing_m
+        )
         solve_kwargs = {
             "initial_guess": initial_guess,
             "interpolant": interpolant,
@@ -450,6 +472,7 @@ class Cruise(Base):
             minimize=True,
         )
 
+        self._last_transcription = transcription
         # --- Solve ---
         df = self._solve(transcription.X, transcription.U, **solve_kwargs)
         df_copy = df.copy()
@@ -457,7 +480,7 @@ class Cruise(Base):
         if not self._last_solution.stats()["success"]:
             warnings.warn("flight might be infeasible.")
 
-        if df.altitude.max() < 5000:
+        if df.altitude.max() < 5000 and h_max is None and self.h_max is None:
             warnings.warn("max altitude < 5000 ft, optimization seems to have failed.")
             df = None
 

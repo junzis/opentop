@@ -41,11 +41,18 @@ neural override; configure it through Python.
 
 ## Loading and initialization
 
-`m0` is a fraction of OpenAP MTOW, not kilograms. Without `payload`, it fixes the
+`m0` accepts kilograms or a fraction of OpenAP MTOW in `(0, 1]`. The value
+`1` means full MTOW. Larger values are kilograms. Non-finite, non-positive,
+and above-MTOW inputs raise `ValueError`. Without `payload`, it fixes the
 initial mass. `CompleteFlight` and `Cruise` also accept `payload` in kilograms:
 this makes initial mass a decision variable and uses `m0` only as its starting
 guess. Bounds use OEW plus payload, fuel capacity and MTOW. `Climb` and `Descent`
 do not expose payload optimization.
+
+`CompleteFlight` constrains final mass between OEW plus any supplied payload
+and maximum landing weight (MLW). Initial mass can exceed MLW, but the flight
+must burn enough fuel to meet the landing limit. A payload that makes minimum
+mass exceed MLW is rejected before problem construction.
 
 Use `setup(nodes=..., max_iter=...)` to configure discretization and IPOPT.
 `initial_guess=` supplies a trajectory DataFrame where supported; Mach values
@@ -120,3 +127,44 @@ timesteps and time-dependent grid objectives are currently unsupported.
 `minimum_arrival_gap_s` is for descents. Check both solver and separation results
 in `MultiAircraftResult`. Large-scale decomposition remains a
 [proposal](design/scalable_fleet_optimization.md).
+
+
+## RAD city-pair altitude ceilings
+
+Pass `flight_level_constraints_path=` to `rad.RadDataset.from_ase_files()`
+to load the FLC2 file. `select_routes()` evaluates unsigned flight-wide
+`FL_CONT` assignments for each city pair and route. The tightest applicable
+ceiling becomes `RouteOption.maximum_altitude_m`; rule IDs remain in
+`option.metadata["altitude_rule_ids"]`. Supply `airport_groups=` to
+`select_routes()` for named airport groups and regional airport sets.
+Named FIR, area, or volume references also need a supplied set definition. Missing group definitions or
+predicate inputs raise an error when an unknown rule could tighten the
+known ceiling. An unknown looser ceiling is already satisfied by a stricter
+known cap.
+
+```python
+rules = rad.read_flc2_rules("VST_2406_FLConstraints.flc2").records
+limit = rad.city_pair_altitude_limit(
+    rules, rad.FlightContext("EBBR", "EDDK"), airport_groups=airport_groups,
+)
+limit.require_resolved()
+optimizer = top.CompleteFlight("A320", "EBBR", "EDDK", m0=60000)
+result = optimizer.trajectory(h_max=limit.maximum_altitude_m, result_object=True)
+```
+
+`CompleteFlight.trajectory(h_max=...)` and `Cruise.trajectory(h_max=...)`
+use meters. Bounds apply at nodes and inside every collocation interval.
+The optimizer bounds the altitude polynomial through its Bernstein
+coefficients. This is a sufficient, potentially conservative constraint.
+The default FL150 cruise floor is replaced by 100 ft when a lower ceiling
+applies. The BADA 4 high-altitude cruise Mach floor also does not apply
+below this ceiling. An explicitly supplied cruise lower bound is preserved; conflicting
+bounds raise `ValueError`. A route ceiling cannot be relaxed through
+`trajectory_kwargs`. Failed altitude validation excludes the route from ranking.
+
+This API enforces the encoded city-pair ceiling predicates. Signed point/profile
+`FL_CONT` rules remain separate and are not enforced. Graph edge flight-level
+filters still use the requested flight level; they are not continuous segment
+altitude constraints. Time periods and exceptions present only in source
+comments are not evaluated. These results are not full operational RAD
+conformance checks.

@@ -32,6 +32,7 @@ class RuleContext:
     """Values made available to supported AWK predicates."""
 
     values: Mapping[str, str | int | Sequence[str]]
+    airport_groups: Mapping[str, Sequence[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -39,6 +40,17 @@ class RuleContext:
             "values",
             MappingProxyType(
                 {key.upper(): value for key, value in self.values.items()}
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "airport_groups",
+            MappingProxyType(
+                {
+                    key.upper(): tuple(member.upper() for member in members)
+                    for key, members in self.airport_groups.items()
+                }
             ),
         )
 
@@ -96,12 +108,27 @@ class _Atom(_Expression):
             values = actual
         if self.operator == "~":
             assert self.regex is not None
-            joined = " ".join(str(item) for item in values)
-            return (
-                TruthValue.TRUE
-                if self.regex.search(joined) is not None
-                else TruthValue.FALSE
+            unknown_group = False
+
+            def expand_group(match: re.Match[str]) -> str:
+                nonlocal unknown_group
+                members = context.airport_groups.get(match.group(0))
+                if members is None:
+                    unknown_group = True
+                    return "(?!)"
+                return (
+                    "(?:" + "|".join(re.escape(item) for item in members) + ")"
+                    if members
+                    else "(?!)"
+                )
+
+            pattern = re.sub(
+                r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b", expand_group, self.regex.pattern
             )
+            joined = " ".join(str(item) for item in values)
+            if re.search(pattern, joined) is not None:
+                return TruthValue.TRUE
+            return TruthValue.INDETERMINATE if unknown_group else TruthValue.FALSE
         if self.operator == "==":
             return (
                 TruthValue.TRUE
@@ -180,6 +207,7 @@ class RadRule:
     active: bool
     status: Conformance
     provenance: Provenance
+    flight_level_scope: str | None = None
 
     def applicability(self, context: RuleContext) -> TruthValue:
         if not self.active:
@@ -327,7 +355,9 @@ def read_awk_rules(path: str | Path) -> ParseResult:
         routing_constraint = (
             constraint_match.group(1).strip() if constraint_match is not None else None
         )
-        flight_level_match = re.search(r"FL_CONT\s*=\s*(\d+)", action, re.IGNORECASE)
+        flight_level_match = re.search(
+            r"FL_CONT\s*=\s*([+-]?\d+)(?=\s*(?:;|}|$))", action, re.IGNORECASE
+        )
         flight_level_constraint = (
             int(flight_level_match.group(1)) if flight_level_match is not None else None
         )
@@ -369,6 +399,18 @@ def read_awk_rules(path: str | Path) -> ParseResult:
                 predicate=predicate,
                 routing_constraint=routing_constraint,
                 flight_level_constraint=flight_level_constraint,
+                flight_level_scope=(
+                    "flight"
+                    if "FL_CONT" in action.upper()
+                    and (
+                        flight_level_match is None
+                        or not flight_level_match.group(1).startswith(("+", "-"))
+                    )
+                    and not re.search(r"\bPOINT\b", combined, re.IGNORECASE)
+                    else "profile"
+                    if flight_level_match is not None
+                    else None
+                ),
                 active=active,
                 status=status,
                 provenance=provenance,
@@ -441,7 +483,7 @@ def read_awk_rules(path: str | Path) -> ParseResult:
             if block_conditions:
                 block_conditions.pop()
             continue
-        if "REGLE" in code:
+        if "REGLE" in code or "FL_CONT" in code:
             add_rule("", code, active=active, provenance=provenance)
 
     return ParseResult(tuple(rules), tuple(diagnostics))

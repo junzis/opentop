@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from math import prod
+from math import comb, prod
 from operator import index
 from typing import Any
 
@@ -68,3 +68,23 @@ class AircraftTranscription:
 
         for interval, tau in extra_points:
             yield self.state_at(interval, tau), self.control_at(interval, tau)
+
+    def constrain_altitude_ceiling(self, ceiling_m: float) -> None:
+        """Bound each altitude polynomial using its Bernstein coefficients."""
+        import casadi as ca
+
+        import numpy as np
+
+        roots = np.array((0.0, *self.collocation_roots))
+        degree = len(roots) - 1
+        basis = np.column_stack(
+            [
+                comb(degree, j) * roots**j * (1 - roots) ** (degree - j)
+                for j in range(degree + 1)
+            ]
+        )
+        transform = np.linalg.inv(basis)
+        for k, states in enumerate(self.Xc):
+            heights = ca.vertcat(self.X[k][2], *(state[2] for state in states))
+            coefficients = ca.mtimes(transform, heights)
+            self.opti.subject_to(coefficients <= ceiling_m)

@@ -67,6 +67,20 @@ in metres. On dense or uneven route meshes, set `dt_min` and `dt_max` explicitly
 the automatic time bounds assume similarly sized intervals and can restrict
 short segments too much.
 
+All phase optimizers accept `trajectory(waypoint_min_spacing_m=20_000, ...)`.
+Before initialization and problem construction, this option retains the first
+waypoint at least 20 km from the previous retained point, starting at departure.
+It also skips trailing waypoints within 20 km of arrival. Distances use the
+optimizer projection. Departure and arrival remain fixed. The mesh and retained
+explicit node assignments stay unchanged. The default is zero, which retains all
+waypoints. `active_waypoints`, `active_waypoint_node_indices`, `skipped_waypoints`,
+and `retained_waypoint_positions` expose the filter result; positions refer to
+zero-based entries in the supplied waypoint list. Automatic node assignments
+are still computed during initialization when explicit indices are absent.
+Thinning relaxes route constraints and can move the solution outside the original
+route corridor. Use it only for points that can be skipped, then check the route
+against any required corridor or RAD restrictions.
+
 This replaces the previous piecewise-constant control transcription. Saved
 trajectory DataFrames retain their columns and `N+1` rows. The numeric export
 helper still accepts historical `N`-column control arrays for replaying old data.
@@ -83,6 +97,10 @@ import opentop
 optimizer = opentop.CompleteFlight("A320", "EHAM", "LGAV", m0=0.85)
 flight = optimizer.trajectory(objective="fuel")
 ```
+
+`m0` accepts kilograms or an MTOW fraction in `(0, 1]`. For example,
+`m0=60000` supplies 60,000 kg, and `m0=1` supplies full MTOW. Inputs above
+MTOW raise `ValueError`.
 
 `flight` is a Pandas DataFrame with columns for position, altitude, mass,
 Mach, TAS, vertical rate, heading, and per-segment `fuel_cost`.
@@ -334,7 +352,7 @@ Common flags:
 | `-a`, `--aircraft` | aircraft type (required), e.g. `A320` |
 | `--phase` | `all` (CompleteFlight, default), `cruise`, `climb`, `descent` |
 | `--obj` | objective expression — single term or weighted sum |
-| `--m0` | initial mass as a fraction of MTOW (default `0.85`) |
+| `--m0` | initial mass in kg or an MTOW fraction in `(0, 1]` (default `0.85`) |
 | `--grid` | cost-grid file; `.casadi` cache preferred, `.parquet` accepted with a slow-path warning |
 | `--max-iter` | IPOPT iteration cap (default `1500`) |
 | `-o`, `--output` | write the trajectory DataFrame to a parquet file |

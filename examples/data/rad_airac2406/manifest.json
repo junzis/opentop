@@ -6,6 +6,15 @@
     "VST_2406.ase": "0c8ca29c0b38958f76e7dc4d22dc8a246042ae0756d81c22e1ed2d9be61faef1",
     "VST_2406_Airports.arp": "22e016ef9ccd9dd0c92cfb95178a555fb8b7ec7febdf308eb0d3ef81d2a40aa9"
   },
+  "altitude_rules": {
+    "source_file": "VST_2406_FLConstraints.flc2",
+    "rule_ids": [
+      "03_EB4012",
+      "03_EB4014",
+      "03_LF4137"
+    ],
+    "scope": "selected city-pair upper limits"
+  },
   "selection": {
     "orientation": "odd",
     "source_candidate_count": 5,
@@ -16,6 +25,7 @@
   "records": {
     "navpoints": 100,
     "segments": 106,
-    "airports": 2
+    "airports": 5,
+    "city_pair_caps": 3
   }
 }

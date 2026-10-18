@@ -23,7 +23,8 @@ RAD graph search          ->  RouteOption[]  ─┘        |
 ```
 
 `RouteOption` is intentionally small. It contains a name, an ordered polyline
-including origin and destination, and optional source metadata. It does not
+including origin and destination, optional source metadata, and an optional
+flight-wide `maximum_altitude_m` ceiling. It does not
 contain RAD rules, graph edges, aircraft data, or optimization settings.
 
 ## Generic API

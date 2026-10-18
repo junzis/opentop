@@ -17,6 +17,7 @@ from ._models import (
     RoutePath,
     RoutePoint,
 )
+from .altitude import CityPairAltitudeLimit, city_pair_altitude_limit
 from .api import RadDataset, RadRouteSelection
 from .costs import DistanceCost, NominalFuelCost
 from .graph import (
@@ -75,6 +76,7 @@ __all__ = [
     "AseCodeSchema",
     "AseSegment",
     "AseSemantics",
+    "CityPairAltitudeLimit",
     "Conformance",
     "Diagnostic",
     "DirectedMultiGraph",
@@ -105,6 +107,7 @@ __all__ = [
     "add_airport_connectors",
     "airport_index",
     "applicable_rules",
+    "city_pair_altitude_limit",
     "distance_heuristic",
     "edge_available",
     "flight_graph",

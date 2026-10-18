@@ -76,9 +76,11 @@ class CompleteFlight(Base):
         self.x_0_lb = [xp_0, yp_0, h_min, self.mass_init_lb, ts_min]
         self.x_0_ub = [xp_0, yp_0, h_min, self.mass_init_ub, ts_min]
 
-        # Final conditions - Lower and upper bounds
-        self.x_f_lb = [xp_f, yp_f, h_min, mass_lower, ts_min]
-        self.x_f_ub = [xp_f, yp_f, h_min, self.mass_init_ub, ts_max]
+        # Enforce the same landing-mass limits checked after solving.
+        if self.mass_min > self.mlw:
+            raise ValueError("minimum mass must not exceed maximum landing weight")
+        self.x_f_lb = [xp_f, yp_f, h_min, self.mass_min, ts_min]
+        self.x_f_ub = [xp_f, yp_f, h_min, min(self.mass_init_ub, self.mlw), ts_max]
 
         # States - Lower and upper bounds
         self.x_lb = [x_min, y_min, h_min, mass_lower, ts_min]
@@ -224,6 +226,7 @@ class CompleteFlight(Base):
         objective: str | Callable = "fuel",
         *,
         max_fuel: float | None = None,
+        h_max: float | None = None,
         return_failed: bool = False,
         initial_guess: pd.DataFrame | None = None,
         remove_cruise: bool = False,
@@ -234,6 +237,7 @@ class CompleteFlight(Base):
         exact_hessian: bool = False,
         waypoints: list[LatLon] | None = None,
         waypoint_tolerance_m: float = 2_000.0,
+        waypoint_min_spacing_m: float = 0.0,
         waypoint_node_indices: list[int] | None = None,
         climb_nodes: int | None = None,
         descent_nodes: int | None = None,
@@ -248,6 +252,9 @@ class CompleteFlight(Base):
         Args:
             objective: Optimization objective. Default "fuel".
             max_fuel: Maximum fuel constraint (kg).
+            h_max: Optional altitude ceiling in meters, including between nodes.
+                The default FL150 cruise floor becomes 100 ft when a lower
+                ceiling applies.
             return_failed: Return result even if optimization fails.
             initial_guess: DataFrame to use as initial guess.
             remove_cruise: Unused for complete flight (accepted for API symmetry).
@@ -259,6 +266,13 @@ class CompleteFlight(Base):
             exact_hessian: Force IPOPT exact Hessian. Default False.
             waypoints: Ordered waypoint list as (lat, lon) pairs.
             waypoint_tolerance_m: Maximum waypoint miss distance in meters.
+            waypoint_min_spacing_m: Skip waypoints closer than this projected
+                distance to the last retained point or a flight endpoint, before
+                constructing the problem. Default 0 disables thinning. This
+                relaxes the supplied route constraints; mandatory fixes must
+                not be thinned. The dynamics mesh is unchanged. Retained and
+                skipped points are available as active_waypoints and
+                skipped_waypoints on the optimizer.
             waypoint_node_indices: Optional interior node indices assigned to
                 waypoints. Defaults to evenly spaced ordered interior nodes.
             climb_nodes: Optional number of initial intervals reserved for climb.
@@ -279,6 +293,9 @@ class CompleteFlight(Base):
         Returns:
             pd.DataFrame (or TrajectoryResult if result_object=True).
         """
+        waypoints, waypoint_node_indices = self._filter_waypoints(
+            waypoints, waypoint_node_indices, waypoint_min_spacing_m
+        )
         _kwargs = {
             "initial_guess": initial_guess,
             "interpolant": interpolant,
@@ -295,6 +312,10 @@ class CompleteFlight(Base):
             "dt_min": dt_min,
             "dt_max": dt_max,
         }
+        if h_max is not None:
+            if not np.isfinite(h_max) or h_max < 100 * ft:
+                raise ValueError("h_max must be finite and at least 100 ft")
+            _kwargs["h_max"] = min(h_max, self.aircraft["limits"]["ceiling"])
         if dt_max is None:
             _kwargs.pop("dt_max")
         phase_kwargs = {
@@ -317,7 +338,9 @@ class CompleteFlight(Base):
         if phase_indices is not None:
             idx_toc, idx_tod = phase_indices
             cruise_vs_limit = self._cruise_vertical_rate_limit()
-            cruise_mach_min = self._cruise_mach_min()
+            cruise_mach_min = (
+                self._cruise_mach_min() if self.x_ub[2] >= 15000 * ft else None
+            )
 
             for k in range(idx_toc, idx_tod + 1):
                 # Keep the allocated cruise mesh approximately level while using
@@ -325,8 +348,9 @@ class CompleteFlight(Base):
                 opti.subject_to(
                     opti.bounded(-cruise_vs_limit, U[k][1], cruise_vs_limit)  # type: ignore[arg-type]  # CasADi stubs wrong
                 )
-                # Minimum cruise alt FL150
-                opti.subject_to(X[k][2] >= 15000 * ft)
+                # A RAD ceiling below FL150 takes priority over the default floor.
+                cruise_floor = 15000 * ft if self.x_ub[2] >= 15000 * ft else 100 * ft
+                opti.subject_to(X[k][2] >= cruise_floor)
                 if cruise_mach_min is not None:
                     opti.subject_to(U[k][0] >= cruise_mach_min)
 
@@ -404,7 +428,7 @@ class CompleteFlight(Base):
         if not self._last_solution.stats()["success"]:
             warnings.warn("flight might be infeasible.")
 
-        if df.altitude.max() < 5000:
+        if df.altitude.max() < 5000 and h_max is None:
             warnings.warn("max altitude < 5000 ft, optimization seems to have failed.")
             df = None
 

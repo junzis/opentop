@@ -52,3 +52,12 @@ def test_build_result_handles_rejected_solve():
     assert result.status == ""
     assert result.iters == 0
     assert all(math.isnan(v) for v in (result.objective, result.fuel, result.grid_cost))
+
+
+@pytest.mark.parametrize("frame", [None, pd.DataFrame()])
+def test_solver_success_without_accepted_trajectory_is_not_success(frame):
+    stats = {"success": True, "return_status": "Solve_Succeeded", "iter_count": 7}
+    result = build_result(frame, stats, 12.5)
+    assert not result.success
+    assert result.status == "Solve_Succeeded"
+    assert result.stats["success"]

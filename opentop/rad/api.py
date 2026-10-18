@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
@@ -15,6 +15,7 @@ from ._models import (
     ParseResult,
     RoutePath,
 )
+from .altitude import city_pair_altitude_limit
 from .graph import DirectedMultiGraph, graph_from_ase
 from .integration import route_option
 from .io import read_arp, read_ase, read_nnpt
@@ -25,6 +26,7 @@ from .planner import (
     airport_index,
     flight_graph,
 )
+from .rules import RadRule, read_flc2_rules
 from .search import EdgeCost
 
 
@@ -44,6 +46,7 @@ class RadDataset:
     graph: DirectedMultiGraph
     airports: Mapping[str, Airport]
     parse_results: Mapping[str, ParseResult] = field(default_factory=dict)
+    flight_level_rules: tuple[RadRule, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "airports", MappingProxyType(dict(self.airports)))
@@ -63,6 +66,7 @@ class RadDataset:
         schema: AseCodeSchema,
         layer: str,
         strict: bool = True,
+        flight_level_constraints_path: str | Path | None = None,
     ) -> RadDataset:
         """Read NNPT/ASE/ARP files and build a route-ready dataset."""
 
@@ -80,6 +84,11 @@ class RadDataset:
             decode=schema,
             strict=strict,
         )
+        flight_levels = (
+            read_flc2_rules(flight_level_constraints_path)
+            if flight_level_constraints_path is not None
+            else None
+        )
         return cls(
             graph,
             airport_index(airports.records),
@@ -87,7 +96,13 @@ class RadDataset:
                 "navpoints": navpoints,
                 "segments": segments,
                 "airports": airports,
+                **(
+                    {"flight_levels": flight_levels}
+                    if flight_levels is not None
+                    else {}
+                ),
             },
+            () if flight_levels is None else flight_levels.records,
         )
 
     def select_routes(
@@ -98,6 +113,7 @@ class RadDataset:
         config: RouteSelectionConfig = RouteSelectionConfig(),
         connector_count: int = 5,
         maximum_connector_distance_m: float = 150_000.0,
+        airport_groups: Mapping[str, Sequence[str]] | None = None,
     ) -> RadRouteSelection:
         """Select RAD candidates and convert them to generic route options."""
 
@@ -120,4 +136,27 @@ class RadDataset:
             route_option(connected, route, name=f"RAD route {index + 1}")
             for index, route in enumerate(candidates)
         )
+        if self.flight_level_rules:
+            constrained = []
+            for option, route in zip(options, candidates):
+                limit = city_pair_altitude_limit(
+                    self.flight_level_rules,
+                    context,
+                    route_points=route.nodes,
+                    airport_groups=airport_groups,
+                )
+                limit.require_resolved()
+                constrained.append(
+                    replace(
+                        option,
+                        maximum_altitude_m=limit.maximum_altitude_m,
+                        metadata={
+                            **option.metadata,
+                            "altitude_rule_ids": tuple(
+                                rule.rule_id for rule in limit.applied_rules
+                            ),
+                        },
+                    )
+                )
+            options = tuple(constrained)
         return RadRouteSelection(connected, candidates, options)

@@ -58,7 +58,7 @@ def build_result(
         grid_cost = float("nan")
     return TrajectoryResult(
         df=result_df,
-        success=bool(stats.get("success", False)),
+        success=has_df and bool(stats.get("success", False)),
         status=str(stats.get("return_status", "")),
         objective=objective,
         iters=int(stats.get("iter_count", 0)),

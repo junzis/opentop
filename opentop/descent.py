@@ -387,6 +387,7 @@ class Descent(Base):
         exact_hessian: bool = False,
         waypoints: list[LatLon] | None = None,
         waypoint_tolerance_m: float = 2_000.0,
+        waypoint_min_spacing_m: float = 0.0,
         waypoint_node_indices: list[int] | None = None,
         variable_timestep: bool | None = None,
         dt_min: float | None = None,
@@ -414,6 +415,13 @@ class Descent(Base):
             exact_hessian: Force IPOPT exact Hessian. Default False.
             waypoints: Ordered waypoint list as (lat, lon) pairs.
             waypoint_tolerance_m: Maximum waypoint miss distance in meters.
+            waypoint_min_spacing_m: Skip waypoints closer than this projected
+                distance to the last retained point or a flight endpoint, before
+                constructing the problem. Default 0 disables thinning. This
+                relaxes the supplied route constraints; mandatory fixes must
+                not be thinned. The dynamics mesh is unchanged. Retained and
+                skipped points are available as active_waypoints and
+                skipped_waypoints on the optimizer.
             waypoint_node_indices: Optional interior node indices assigned to
                 waypoints. Defaults to evenly spaced ordered interior nodes.
             variable_timestep: Optimize interval durations. Defaults to True
@@ -432,6 +440,9 @@ class Descent(Base):
         Returns:
             pd.DataFrame (or TrajectoryResult if result_object=True).
         """
+        waypoints, waypoint_node_indices = self._filter_waypoints(
+            waypoints, waypoint_node_indices, waypoint_min_spacing_m
+        )
         if df_cruise is None:
             if self.debug:
                 print("Finding the preliminary optimal cruise parameters...")

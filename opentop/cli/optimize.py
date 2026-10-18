@@ -22,7 +22,7 @@ from ._helpers import build_objective_callable, load_grid_file, parse_objective
     type=float,
     default=0.85,
     show_default=True,
-    help="Initial mass ratio (fraction of MTOW).",
+    help="Initial mass in kg or an MTOW fraction in (0, 1].",
 )
 @click.option(
     "--phase",

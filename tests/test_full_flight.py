@@ -117,7 +117,8 @@ def test_complete_flight_without_payload_keeps_initial_mass_fixed(
 
     assert opt.x_0_lb[3] == opt.mass_init
     assert opt.x_0_ub[3] == opt.mass_init
-    assert opt.x_f_lb[3] == opt.oew * 0.5
+    assert opt.x_f_lb[3] == opt.mass_min
+    assert opt.x_f_ub[3] == min(opt.mass_init, opt.mlw)
 
 
 def test_complete_flight_explicit_phase_nodes_shape_altitude_guess():
@@ -216,3 +217,29 @@ def test_complete_flight_return_failed_returns_df_on_tight_fuel_budget():
         "max_fuel=100 should be infeasible; if this passes, something is wrong "
         "with the solver or route"
     )
+
+
+@pytest.mark.parametrize("m0", [0.65, 0.85])
+def test_complete_flight_landing_bounds_match_postsolve_checks(m0):
+    opt = top.CompleteFlight("A319", "EBBR", "LSZH", m0=m0)
+    opt.init_conditions()
+    assert opt.x_f_lb[3] == opt.mass_min
+    assert opt.x_f_ub[3] == min(opt.mass_init, opt.mlw)
+
+
+def test_complete_flight_payload_above_landing_weight_is_rejected():
+    with pytest.warns(UserWarning, match="m0 is used only as the initial mass guess"):
+        opt = top.CompleteFlight("A319", "EBBR", "LSZH", 0.85, payload=24_000)
+    with pytest.raises(ValueError, match="maximum landing weight"):
+        opt.init_conditions()
+
+
+def test_complete_flight_above_mlw_initial_mass_can_land():
+    opt = top.CompleteFlight("A319", "EBBR", "LSZH", 0.85)
+    opt.setup(ipopt_kwargs={"max_cpu_time": 90})
+    result = opt.trajectory(result_object=True)
+    assert result.success, result.stats
+    assert not result.df.empty
+    assert result.df.mass.iloc[0] > opt.mlw
+    assert opt.mass_min - 1e-3 <= result.df.mass.iloc[-1] <= opt.mlw + 1e-3
+    assert result.fuel >= opt.mass_init - opt.mlw - 1e-3

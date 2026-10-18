@@ -1,0 +1,10 @@
+#SECTION_1 City Pair Level Capping (RAD ANNEX 2A)
+
+			#RAD 03_EB4012 - ANNEX="RAD ANNEX 2A" CATEGORISATION=C COMMENTS="'CITY_PAIR' split into 'FROM_ADEP', 'TO_ADES'!<br>'FLOW_ROUTING' removed because duplicated with 'FL_CAPPING'!" CROSSING="EB <br>ED" FL_CAPPING="Not above FL175" FROM_ADEP=EBBR OP_GOAL="To comply with LoA transfer conditions for this specific city pair, keeping traffic in the lower airspace" PERIOD=H24 SUSPENDED=SUS_NO TO_ADES=EDDK - AIRAC 2206 To comply with LoA transfer conditions for this specific city pair, keeping traffic in the lower airspace
+			if (DEP ~/EBBR/ && ARR ~/EDDK/ && $3==0) FL_CONT = 175
+
+			#RAD 03_EB4014 - ANNEX="RAD ANNEX 2A" CATEGORISATION=C COMMENTS="The rule was created by import on 2020-12-17!" CROSSING="EB, EH" FL_CAPPING="not-above FL055" FROM_ADEP=EBAW OP_GOAL="LOA compatability" PERIOD=H24 RELEASE_DATE=16/05/2022 SUSPENDED=SUS_NO TO_ADES=EHRD VALID_FROM=2206 VALID_UNTIL=UFN - AIRAC 2207
+			if (DEP ~/EBAW/ && ARR ~/EHRD/ && $3==0) FL_CONT = 55
+
+			#RAD 03_LF4137 - ANNEX="RAD ANNEX 2A" CATEGORISATION=C COMMENTS="'CITY_PAIR' split into 'FROM_ADEP', 'TO_ADES'!<br>'FLOW_ROUTING' removed because duplicated with 'FL_CAPPING'!" CROSSING="EB, LF" FL_CAPPING="Not above FL315" FROM_ADEP=EHAM OP_GOAL="To optimize use of available capacity" PERIOD=H24 RELEASE_DATE=04/11/2022 SUSPENDED=SUS_NO TO_ADES=LFLC VALID_FROM=2213 VALID_UNTIL=UFN - AIRAC 2213
+			if (DEP ~/EHAM/ && ARR ~/LFLC/ && $3==0) FL_CONT = 315

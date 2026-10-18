@@ -60,15 +60,20 @@ def _normalize_waypoint(waypoint: Waypoint) -> Waypoint:
 
 @dataclass(frozen=True, slots=True)
 class RouteOption:
-    """One named route polyline, including origin and destination."""
+    """Route polyline with optional flight-wide altitude ceiling in meters."""
 
     name: str
     waypoints: tuple[Waypoint, ...]
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    maximum_altitude_m: float | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("route name must not be empty")
+        if self.maximum_altitude_m is not None and (
+            not math.isfinite(self.maximum_altitude_m) or self.maximum_altitude_m <= 0
+        ):
+            raise ValueError("route altitude ceiling must be finite and positive")
         normalized = tuple(_normalize_waypoint(waypoint) for waypoint in self.waypoints)
         if len(normalized) < 2:
             raise ValueError("a route needs at least origin and destination")
@@ -522,10 +527,20 @@ def _optimize_route_options(
             nodes = max(minimum_nodes, nodes_per_leg * max(1, leg_count))
             nodes = max(nodes, len(waypoints) + 1)
             optimizer.setup(nodes=nodes)
+            route_kwargs = dict(extra_kwargs)
+            ceiling = route.maximum_altitude_m
+            if ceiling is not None:
+                supplied_ceiling = route_kwargs.get("h_max")
+                if supplied_ceiling is not None:
+                    ceiling = min(ceiling, supplied_ceiling)
+                route_kwargs["h_max"] = ceiling
+            guess_altitude = float(optimizer.aircraft["cruise"]["height"])
+            if ceiling is not None:
+                guess_altitude = min(guess_altitude, ceiling)
             guess = route_initial_guess(
                 route,
                 nodes=nodes,
-                altitude_ft=float(optimizer.aircraft["cruise"]["height"]) / ft,
+                altitude_ft=guess_altitude / ft,
                 mass_kg=float(optimizer.mass_init),
                 complete_flight=isinstance(optimizer, CompleteFlight),
             )
@@ -535,7 +550,7 @@ def _optimize_route_options(
                 waypoints=waypoints,
                 waypoint_tolerance_m=waypoint_tolerance_m,
                 result_object=True,
-                **extra_kwargs,
+                **route_kwargs,
             )
             df = trajectory.df
             conforms = trajectory.success and validate_waypoint_trajectory(
@@ -543,6 +558,14 @@ def _optimize_route_options(
                 waypoints,
                 tolerance_m=waypoint_tolerance_m * 1.05,
             )
+            if ceiling is not None and conforms:
+                conforms = (
+                    df is not None
+                    and not df.empty
+                    and "altitude" in df
+                    and np.isfinite(df.altitude.to_numpy()).all()
+                    and bool((df.altitude * ft <= ceiling + 0.1).all())
+                )
             results.append(
                 OptimizedRouteOption(
                     route,
