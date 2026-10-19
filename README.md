@@ -188,10 +188,13 @@ See the
 [coordinated-arrivals notebook](examples/multi_aircraft_arrivals.ipynb) for a
 three-aircraft runway-arrival example.
 
-The implementation supports uniform-timestep `Cruise` and `Descent`
-optimization, including ordered waypoint constraints. Wind, variable
-timesteps, time-dependent 4D grid objectives, and other phases are rejected
-explicitly until their fleet timing semantics are implemented.
+The implementation supports `Cruise` and `Descent` optimization, including
+ordered waypoint constraints. Timesteps are uniform by default; set
+`"variable_timestep": True` (optionally with `dt_min`/`dt_max`) in a flight's
+options to optimize its interval durations in both the warm start and the
+joint problem. Separation constraints then use each interval's actual start
+time and duration. Wind, time-dependent 4D grid objectives, and other phases
+are rejected explicitly until their fleet timing semantics are implemented.
 
 ### Wind integration
 

@@ -213,7 +213,8 @@ def test_crossing_aircraft_can_avoid_conflict_at_one_common_altitude():
     )
 
 
-def test_two_descent_arrivals_are_sequenced_and_separated():
+@pytest.mark.parametrize("variable_timestep", [False, True])
+def test_two_descent_arrivals_are_sequenced_and_separated(variable_timestep: bool):
     runway = (52.360258, 4.711725)
     approach_waypoints: tuple[tuple[float, float], ...] = tuple(
         (float(point[0]), float(point[1]))
@@ -257,7 +258,8 @@ def test_two_descent_arrivals_are_sequenced_and_separated():
                     "waypoint_node_indices": [6, 8],
                     "waypoint_tolerance_m": 500.0,
                     "route_heading_tolerance_deg": 15.0,
-                    "variable_timestep": False,
+                    "variable_timestep": variable_timestep,
+                    **({"dt_min": 20.0, "dt_max": 400.0} if variable_timestep else {}),
                 },
             )
         )
@@ -290,6 +292,10 @@ def test_two_descent_arrivals_are_sequenced_and_separated():
         result.pair_reports[0].required_metric
         - top.SeparationConfig().verification_tolerance
     )
+    if variable_timestep:
+        # The joint problem kept the optimized interval durations.
+        for trajectory in (first, second):
+            assert np.ptp(np.diff(trajectory.ts.to_numpy())) > 1.0
 
 
 def test_single_aircraft_shared_opti_matches_direct_cruise():
