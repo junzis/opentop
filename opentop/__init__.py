@@ -1,6 +1,7 @@
 from importlib.metadata import version
 
 from . import rad, tools, vis
+from ._step_climb import StepClimbOptions
 from .base import Base
 from .climb import Climb
 from .cruise import Cruise
@@ -45,6 +46,7 @@ __all__ = [
     "RouteOption",
     "RouteSelectionConfig",
     "SeparationConfig",
+    "StepClimbOptions",
     "optimize_routes",
     "rad",
     "tools",

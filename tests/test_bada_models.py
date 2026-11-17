@@ -26,6 +26,25 @@ requires_bada4 = pytest.mark.skipif(
 )
 
 
+@requires_bada4
+def test_step_climb_bada4_keeps_sampled_fuel_domain():
+    optimizer = top.Cruise(
+        "A320-214",
+        "EHAM",
+        "EDDF",
+        60_000,
+        performance_model="bada4",
+        bada_path=BADA4_PATH,
+    )
+    optimizer.setup(nodes=12, max_iter=1000)
+    frame = cast(pd.DataFrame, optimizer.trajectory(step_climb=True, h_max=35_000 * ft))
+    assert optimizer.success, optimizer.stats
+    assert frame.fuel_cost.sum() > 0
+    assert frame.altitude.max() <= 35_000 + 1
+    assert optimizer.step_climb_diagnostics["path_audit"]["success"]
+    assert optimizer.step_climb_diagnostics["climb_seconds"] == 0
+
+
 def test_build_native_performance_models():
     bundle = build_performance_models(
         "A320",
@@ -106,7 +125,7 @@ def test_bada4_complete_flight_uses_clean_mach_domain():
 
 
 @requires_bada4
-def test_bada4_complete_flight_tightens_cruise_vertical_rate_domain():
+def test_bada4_complete_flight_uses_common_cruise_vertical_rate_domain():
     bada4_opt = top.CompleteFlight(
         "A320-214",
         (0.0, 0.0),
@@ -117,8 +136,35 @@ def test_bada4_complete_flight_tightens_cruise_vertical_rate_domain():
     )
     openap_opt = top.CompleteFlight("A320", (0.0, 0.0), (0.0, 1.0), 0.85)
 
-    assert bada4_opt._cruise_vertical_rate_limit() == pytest.approx(100 * fpm)
+    assert bada4_opt._cruise_vertical_rate_limit() == pytest.approx(500 * fpm)
     assert openap_opt._cruise_vertical_rate_limit() == pytest.approx(500 * fpm)
+
+
+@requires_bada4
+def test_bada4_complete_flight_allows_climb_above_100_fpm_in_cruise():
+    class CruiseClimbProbe(top.CompleteFlight):
+        def _solve(self, X, U, **kwargs):
+            toc, tod = self._phase_node_indices()
+            self._opti.subject_to(U[(toc + tod) // 2][1] == 300 * fpm)
+            return super()._solve(X, U, **kwargs)
+
+    opt = CruiseClimbProbe(
+        "A320-214",
+        "EBBR",
+        "EDDK",
+        m0=60000,
+        performance_model="bada4",
+        bada_path=BADA4_PATH,
+    )
+    opt.setup(nodes=20, ipopt_kwargs={"max_cpu_time": 60})
+    result = opt.trajectory(h_max=12500 * ft, result_object=True)
+    assert result.success, result.status
+    toc, tod = opt._phase_node_indices()
+    rates = result.df.vertical_rate.to_numpy()
+    assert rates[(toc + tod) // 2] == pytest.approx(300, abs=0.01)
+    assert rates[: toc + 1].min() >= -0.01
+    assert rates[tod:].max() <= 0.01
+    assert result.df.altitude.iloc[[0, -1]].to_numpy() == pytest.approx(100, abs=0.01)
 
 
 @requires_bada4

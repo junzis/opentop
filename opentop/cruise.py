@@ -11,6 +11,12 @@ from openap.aero import fpm, ft, kts
 import numpy as np
 import pandas as pd
 
+from ._step_climb import (
+    SparseAscent,
+    StepClimbOptions,
+    resolve_step_climb,
+    validate_step_climb_objective,
+)
 from ._track import constrain_track, project_track, validate_track
 from ._transcription import AircraftTranscription
 from ._types import LatLon
@@ -240,8 +246,19 @@ class Cruise(Base):
         route_margin_m: float = 10_000.0,
         name_prefix: str = "flight",
         minimize: bool = False,
+        step_climb: bool | StepClimbOptions = False,
     ) -> AircraftTranscription:
         """Add this cruise phase to an existing CasADi Opti stack."""
+        step_options = resolve_step_climb(step_climb)
+        validate_step_climb_objective(step_options, objective)
+        if step_options is not None:
+            variable_timestep = True if variable_timestep is None else variable_timestep
+            dt_min = 30.0 if dt_min is None else dt_min
+            dt_max = 900.0 if dt_max is None else dt_max
+        if step_options is not None and not minimize:
+            raise ValueError("step_climb requires a single-aircraft trajectory solve")
+        if step_options is not None and self.allow_descent:
+            raise ValueError("step_climb cannot be combined with allow_cruise_descent")
         kwargs = {
             "initial_guess": initial_guess,
             "interpolant": interpolant,
@@ -269,6 +286,9 @@ class Cruise(Base):
         if h_max is not None or self.h_max is not None:
             kwargs["h_max"] = h_max if h_max is not None else self.h_max
         self.init_conditions(**init_kwargs)
+        if step_options is not None:
+            for bounds in (self.u_0_ub, self.u_f_ub, self.u_ub):
+                bounds[1] = step_options.max_climb_rate_fpm * fpm
 
         transcription = self._add_transcription(
             opti,
@@ -295,12 +315,22 @@ class Cruise(Base):
                 opti.set_initial(control[2], heading)
 
         # Nonlinear performance constraints need checks inside each interval.
-        for state, control in transcription.path_points():
+        performance_points = (
+            [(k, tau) for k in range(self.nodes) for tau in (0.25, 0.5, 0.75)]
+            if step_options is not None
+            else ()
+        )
+        for state, control in transcription.path_points(performance_points):
             v = oc.aero.mach2tas(control[0], state[2], dT=self.dT)
             tas, alt = v / kts, state[2] / ft
-            self._constrain_clean_performance(
-                opti, state[3], tas, alt, self._thrust_climb(tas, alt)
+            thrust_max = self._thrust_climb(tas, alt)
+            drag = self._constrain_clean_performance(
+                opti, state[3], tas, alt, thrust_max
             )
+            if step_options is not None:
+                opti.subject_to(
+                    (thrust_max - drag) * v - state[3] * oc.aero.g0 * control[1] >= 0
+                )
 
         # ts and dt consistency
         for k in range(self.nodes):
@@ -360,6 +390,12 @@ class Cruise(Base):
         if max_fuel is not None:
             opti.subject_to(X[0][3] - X[-1][3] <= max_fuel)
 
+        self._step_climb_formulation = (
+            SparseAscent.add(transcription, step_options, 0, self.nodes)
+            if step_options is not None
+            else None
+        )
+
         return transcription
 
     def trajectory(
@@ -385,6 +421,7 @@ class Cruise(Base):
         dt_max: float | None = None,
         route_margin_m: float = 10_000.0,
         result_object: bool = False,
+        step_climb: bool | StepClimbOptions = False,
     ) -> pd.DataFrame | TrajectoryResult:
         """Compute the optimal cruise trajectory.
 
@@ -423,6 +460,17 @@ class Cruise(Base):
                 Defaults to 10,000 meters.
             result_object: If True, return a TrajectoryResult instead of a
                 DataFrame. Default False.
+            step_climb: Search automatically generated level/climb schedules.
+                True uses StepClimbOptions defaults: sustained climbs >=500 fpm,
+                level dwells >=300 s, and continuous acceleration-limited ramps.
+                The local candidate search includes no steps and can require
+                many solves; it does not guarantee a global optimum. Timing and
+                continuous altitudes are optimized. Unless explicitly supplied,
+                variable_timestep=True, dt_min=30, and dt_max=900 are used.
+                objective_value is fuel; step_climb_penalty, step_climb_stats,
+                and step_climb_diagnostics describe the separate preference and
+                search. Requires objective="fuel". Default False preserves the
+                original formulation.
 
         Returns:
             pd.DataFrame (or TrajectoryResult if result_object=True).
@@ -430,6 +478,10 @@ class Cruise(Base):
         waypoints, waypoint_node_indices = self._filter_waypoints(
             waypoints, waypoint_node_indices, waypoint_min_spacing_m
         )
+        if resolve_step_climb(step_climb) is not None:
+            variable_timestep = True if variable_timestep is None else variable_timestep
+            dt_min = 30.0 if dt_min is None else dt_min
+            dt_max = 900.0 if dt_max is None else dt_max
         solve_kwargs = {
             "initial_guess": initial_guess,
             "interpolant": interpolant,
@@ -470,11 +522,18 @@ class Cruise(Base):
             dt_max=dt_max,
             route_margin_m=route_margin_m,
             minimize=True,
+            step_climb=step_climb,
         )
 
         self._last_transcription = transcription
         # --- Solve ---
-        df = self._solve(transcription.X, transcription.U, **solve_kwargs)
+        self.step_climb_penalty = None
+        self.step_climb_stats = []
+        self.step_climb_diagnostics = None
+        if self._step_climb_formulation is None:
+            df = self._solve(transcription.X, transcription.U, **solve_kwargs)
+        else:
+            df = self._step_climb_formulation.solve(self, **solve_kwargs)
         df_copy = df.copy()
 
         if not self._last_solution.stats()["success"]:

@@ -35,12 +35,13 @@ def constant_tailwind_df():
     return pd.DataFrame(rows)
 
 
-def test_cruise_with_constant_tailwind_converges(constant_tailwind_df):
+@pytest.mark.parametrize("step_climb", [False, True])
+def test_cruise_with_constant_tailwind_converges(constant_tailwind_df, step_climb):
     """Cruise with a steady 10 m/s tailwind must solve cleanly."""
     opt = top.Cruise("A320", (52.308, 4.764), (50.033, 8.570), m0=0.85)
     opt.setup(max_iter=500)
     opt.enable_wind(constant_tailwind_df)
-    df = cast(pd.DataFrame, opt.trajectory(objective="fuel"))
+    df = cast(pd.DataFrame, opt.trajectory(objective="fuel", step_climb=step_climb))
 
     assert df is not None, "trajectory returned None"
     assert opt.success, f"solver failed: {opt.stats}"

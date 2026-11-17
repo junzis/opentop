@@ -171,6 +171,9 @@ class Base:
         self.debug = False
         self._last_solution = None
         self.objective_value: float | None = None
+        self.step_climb_penalty: float | None = None
+        self.step_climb_stats: list[dict[str, Any]] = []
+        self.step_climb_diagnostics: dict[str, Any] | None = None
         self.grid_cost_value: float | None = None
         self.setup()
 
@@ -1019,8 +1022,8 @@ class Base:
             sol = self._opti.debug
 
         self._last_solution = sol
-        # Undo auto_rescale_objective so callers always see the physical value.
-        self.objective_value = float(sol.value(self._opti.f)) * self._objective_rescale
+        # Report the physical objective independently of optional regularizers.
+        self.objective_value = float(sol.value(self._last_transcription.objective_raw))
         grid_expr = getattr(self, "_grid_cost_expr", None)
         self.grid_cost_value = (
             None if grid_expr is None else float(sol.value(grid_expr))

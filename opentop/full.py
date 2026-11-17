@@ -12,6 +12,12 @@ from openap.aero import fpm, ft, kts
 import numpy as np
 import pandas as pd
 
+from ._step_climb import (
+    SparseAscent,
+    StepClimbOptions,
+    resolve_step_climb,
+    validate_step_climb_objective,
+)
 from ._types import LatLon
 from .base import Base
 
@@ -204,9 +210,7 @@ class CompleteFlight(Base):
         )
 
     def _cruise_vertical_rate_limit(self) -> float:
-        """Return cruise vertical-rate limit in m/s."""
-        if self.performance_model == "bada4":
-            return 100 * fpm
+        """Return the common cruise vertical-rate limit in m/s."""
         return 500 * fpm
 
     def _cruise_mach_min(self) -> float | None:
@@ -246,6 +250,7 @@ class CompleteFlight(Base):
         dt_max: float | None = None,
         result_object: bool = False,
         path_constraint_points: list[tuple[int, float]] | None = None,
+        step_climb: bool | StepClimbOptions = False,
     ) -> pd.DataFrame | TrajectoryResult:
         """Compute the optimal complete flight trajectory.
 
@@ -289,10 +294,28 @@ class CompleteFlight(Base):
                 peaks without changing the dynamics mesh. Default None keeps
                 boundary and collocation checks. Finite sampling does not
                 guarantee feasibility everywhere between the checked points.
+            step_climb: Search automatically generated level/climb schedules
+                within the cruise phase. True uses StepClimbOptions defaults:
+                sustained climbs >=500 fpm and level dwells >=300 s, including
+                before descent. Initial climb and final descent retain their
+                original limits. The local candidate search includes no steps,
+                can require many solves, and has no global-optimality guarantee.
+                Timing and continuous altitudes are optimized. Unless supplied,
+                variable_timestep=True, dt_min=30, and dt_max=900 are used.
+                objective_value is fuel; step_climb_penalty, step_climb_stats,
+                and step_climb_diagnostics describe the preference and search.
+                Requires objective="fuel". Default False preserves the original
+                formulation.
 
         Returns:
             pd.DataFrame (or TrajectoryResult if result_object=True).
         """
+        step_options = resolve_step_climb(step_climb)
+        validate_step_climb_objective(step_options, objective)
+        if step_options is not None:
+            variable_timestep = True if variable_timestep is None else variable_timestep
+            dt_min = 30.0 if dt_min is None else dt_min
+            dt_max = 900.0 if dt_max is None else dt_max
         waypoints, waypoint_node_indices = self._filter_waypoints(
             waypoints, waypoint_node_indices, waypoint_min_spacing_m
         )
@@ -337,7 +360,11 @@ class CompleteFlight(Base):
         phase_indices = self._phase_node_indices(**phase_kwargs)
         if phase_indices is not None:
             idx_toc, idx_tod = phase_indices
-            cruise_vs_limit = self._cruise_vertical_rate_limit()
+            cruise_vs_limit = (
+                self._cruise_vertical_rate_limit()
+                if step_options is None
+                else step_options.max_climb_rate_fpm * fpm
+            )
             cruise_mach_min = (
                 self._cruise_mach_min() if self.x_ub[2] >= 15000 * ft else None
             )
@@ -361,9 +388,12 @@ class CompleteFlight(Base):
                 opti.subject_to(U[k][1] <= 0)
 
         # Force and energy constraints
-        for state, control in self._last_transcription.path_points(
-            path_constraint_points or ()
-        ):
+        performance_points = list(path_constraint_points or ())
+        if step_options is not None:
+            performance_points.extend(
+                (k, tau) for k in range(self.nodes) for tau in (0.25, 0.5, 0.75)
+            )
+        for state, control in self._last_transcription.path_points(performance_points):
             mass = state[3]
             v = oc.aero.mach2tas(control[0], state[2], dT=self.dT)
             tas = v / kts
@@ -422,7 +452,16 @@ class CompleteFlight(Base):
             opti.subject_to(X[0][3] - X[-1][3] <= customized_max_fuel)
 
         # --- Solve ---
-        df = self._solve(X, U, **_kwargs)
+        self.step_climb_penalty = None
+        self.step_climb_stats = []
+        self.step_climb_diagnostics = None
+        if step_options is None:
+            df = self._solve(X, U, **_kwargs)
+        else:
+            sparse_ascent = SparseAscent.add(
+                self._last_transcription, step_options, idx_toc, idx_tod
+            )
+            df = sparse_ascent.solve(self, **_kwargs)
         df_copy = df.copy()
 
         if not self._last_solution.stats()["success"]:
