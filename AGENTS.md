@@ -10,12 +10,15 @@ The public package API is exported from `opentop/__init__.py`. Keep backwards co
 
 ## Repository Map
 
-- `opentop/base.py`: shared optimizer setup, projection, OpenAP model wiring, collocation NLP construction, solve execution, objective helper methods, and result conversion.
+- `opentop/base.py`: shared optimizer setup, projection, performance model wiring, NLP construction, solve execution, and result conversion.
 - `opentop/full.py`: complete flight optimizer.
 - `opentop/cruise.py`: cruise phase optimizer and optional fixed Mach/altitude/track constraints.
 - `opentop/climb.py`: climb phase optimizer.
 - `opentop/descent.py`: descent phase optimizer.
-- `opentop/_dynamics.py`: pure dynamics and initial-guess helpers.
+- `opentop/_dynamics.py` and `opentop/_transcription.py`: shared dynamics and direct collocation.
+- `opentop/_initialization.py`: full-flight and step-climb initial guesses.
+- `opentop/_physical_constraints.py` and `opentop/_path_validation.py`: physical constraint definitions and between-node validation.
+- `opentop/_step_climb.py` and `opentop/_continuous_step.py`: sparse and continuous step-climb formulations.
 - `opentop/_objectives.py`: pure objective functions and objective resolver.
 - `opentop/_trajectory.py`: numeric solver output to trajectory DataFrame conversion.
 - `opentop/_multi_start.py`: multi-start wrapper and initial-guess perturbation logic.
@@ -27,6 +30,12 @@ The public package API is exported from `opentop/__init__.py`. Keep backwards co
 - `tests/`: pytest suite with both fast unit tests and solver-heavy integration tests.
 - `docs/design/`: design notes for larger features.
 - `examples/`: notebooks and quick examples.
+
+## Git And Local Files
+
+- `debug/`, `.agents/`, and `.codex/` are ignored local directories. Never force-add an ignored file without explicit user authorization for that exact path.
+- Keep tests self-contained using tracked source and fixtures. Move reusable code or test data to the appropriate tracked location before depending on it in a test. Use `git check-ignore -v -- <path>` if a file is unexpectedly ignored.
+- Before committing, review `git diff --cached --name-status` and confirm every staged path belongs to the requested change.
 
 ## Development Commands
 
@@ -47,9 +56,8 @@ Prefer targeted tests while developing, then broaden verification according to t
 
 - For parser, CLI helper, dataclass, replay normalization, or cache changes, run the directly related test file first.
 - For objective, trajectory conversion, or fuel/mass accounting changes, run the targeted tests plus at least one phase optimizer test.
-- For changes in `Base._build_opti`, `Base._solve`, phase constraints, or dynamics, expect solver-heavy tests to be relevant.
-- `uv run pytest --collect-only -q` is cheap and useful for confirming test discovery.
-- Run test files under `tests/` with xdist, for example `uv run pytest tests/test_cruise.py -n auto -q`.
+- For changes in `Base._build_opti`, `Base._solve`, phase constraints, or dynamics, include relevant phase optimizer tests.
+- For changes to initialization, step climbs, or between-node physical validation, use `tests/test_initialization.py`, `tests/test_step_climb.py`, or `tests/test_production_path_validation.py` as appropriate.
 - Avoid adding tests that require live network access. Existing replay tests use fixtures and mocks where possible.
 - Grid-cost tests should reuse cached `.casadi` interpolants instead of rebuilding bsplines on every run. Prefer `opentop.tools.cached_interpolant_from_dataframe(...)` with a fixture path under `tests/fixtures/` when size permits.
 
@@ -92,7 +100,6 @@ Prefer targeted tests while developing, then broaden verification according to t
 
 ## Style And Tooling
 
-- Runtime support starts at Python 3.11; linting and type-checking target Python 3.13.
 - Ruff is configured in `pyproject.toml`; keep imports sorted and lint-clean.
 - Pyright runs in basic mode for `opentop`.
 - CasADi, OpenAP, pyproj, and sklearn have incomplete typing in places. Existing `# type: ignore[...]` comments are often intentional; do not remove them unless verified.
