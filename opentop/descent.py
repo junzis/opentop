@@ -11,6 +11,7 @@ from openap.aero import fpm, ft, kts
 import numpy as np
 import pandas as pd
 
+from ._path_validation import PhysicalValidationOptions
 from ._transcription import AircraftTranscription
 from ._types import LatLon
 from .base import Base
@@ -396,6 +397,8 @@ class Descent(Base):
         route_heading_tolerance_deg: float | None = None,
         inbound_route_side: str | None = None,
         max_duration_s: float | None = None,
+        physical_validation: bool | PhysicalValidationOptions = True,
+        return_failed: bool = False,
         result_object: bool = False,
     ) -> pd.DataFrame | TrajectoryResult:
         """Compute the optimal descent trajectory.
@@ -443,18 +446,26 @@ class Descent(Base):
         waypoints, waypoint_node_indices = self._filter_waypoints(
             waypoints, waypoint_node_indices, waypoint_min_spacing_m
         )
+        self.preliminary_solver_calls = 0
         if df_cruise is None:
             if self.debug:
                 print("Finding the preliminary optimal cruise parameters...")
-            df_cruise = self.cruise.trajectory(objective)  # type: ignore[assignment]  # result_object=False always returns DataFrame
+            # This preliminary solve only supplies a phase target/initialization.
+            # The final requested phase receives the configured dense validation.
+            df_cruise = self.cruise.trajectory(objective, physical_validation=False)
+            self.preliminary_solver_calls = self.cruise.physical_validation_diagnostics[
+                "solves"
+            ]
 
         if self.debug:
             print("Calculating optimal descent trajectory...")
 
-        assert isinstance(df_cruise, pd.DataFrame)
+        if not isinstance(df_cruise, pd.DataFrame):
+            raise RuntimeError("preliminary cruise optimization failed")
 
         _kwargs = {
             "initial_guess": initial_guess,
+            "physical_validation": physical_validation,
             "interpolant": interpolant,
             "n_dim": n_dim,
             "time_dependent": time_dependent,
@@ -501,9 +512,14 @@ class Descent(Base):
             minimize=True,
         )
 
+        self._last_transcription = transcription
+        transcription.physical_contract = "descent"
         df = self._solve(transcription.X, transcription.U, **_kwargs)
 
-        if remove_cruise:
+        if not self.success and not return_failed:
+            df = None
+
+        if df is not None and remove_cruise:
             df = df.query("vertical_rate < -100")
 
         if result_object:

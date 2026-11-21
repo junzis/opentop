@@ -20,7 +20,9 @@ except ImportError:
     warnings.warn("cfgrib and sklearn are required for wind integration")
 
 from . import _dynamics, _objectives, _trajectory
+from ._path_validation import resolve_validation, solve_validated
 from ._performance import build_numeric_fuelflow, build_performance_models
+from ._physical_constraints import clean_rows, fuel_row
 from ._transcription import AircraftTranscription
 from ._types import LatLon
 
@@ -174,6 +176,7 @@ class Base:
         self.step_climb_penalty: float | None = None
         self.step_climb_stats: list[dict[str, Any]] = []
         self.step_climb_diagnostics: dict[str, Any] | None = None
+        self.physical_validation_diagnostics: dict[str, Any] | None = None
         self.grid_cost_value: float | None = None
         self.setup()
 
@@ -220,7 +223,11 @@ class Base:
                 "No solver stats available — call trajectory() or"
                 " multi_start_trajectory() first."
             )
-        return self._last_solution.stats()
+        stats = dict(self._last_solution.stats())
+        diagnostics = getattr(self, "physical_validation_diagnostics", None)
+        if diagnostics is not None:
+            stats["physical_validation"] = diagnostics
+        return stats
 
     @property
     def success(self) -> bool:
@@ -397,6 +404,7 @@ class Base:
         tol: float = 1e-6,
         acceptable_tol: float = 1e-4,
         ipopt_kwargs: dict[str, Any] | None = None,
+        expand: bool | None = None,
     ) -> None:
         """Configure the optimizer discretization and solver settings.
 
@@ -412,6 +420,10 @@ class Base:
             acceptable_tol: IPOPT acceptable tolerance. Default 1e-4.
             ipopt_kwargs: Additional IPOPT options as {key: value}.
                 Keys are passed as "ipopt.{key}".
+            expand: Expand CasADi graphs before solving. None enables expansion
+                automatically for OpenAP fuel problems with built-in PolyWind,
+                without grid costs, reference tracks or external fuel models.
+                False disables it; True explicitly requests it for any problem.
         """
         if ipopt_kwargs is None:
             ipopt_kwargs = {}
@@ -452,6 +464,8 @@ class Base:
 
         for key, value in ipopt_kwargs.items():
             self.solver_options[f"ipopt.{key}"] = value
+        if expand is not None:
+            self.solver_options["expand"] = bool(expand)
 
     def init_model(self, objective, *, function_name: str = "f", **kwargs):
         """Build the symbolic dynamics function for the given objective.
@@ -572,6 +586,17 @@ class Base:
         Opti stack and does not set an objective unless ``minimize`` is true.
         """
         self._opti = opti
+        # Recompute for each problem; an earlier wind/fuel solve must not enable
+        # expansion for a later custom objective or an SX-incompatible spline.
+        self._auto_expand = (
+            isinstance(objective, str)
+            and objective == "fuel"
+            and getattr(self, "performance_model", None) == "openap"
+            and type(getattr(self, "wind", None)) is tools.PolyWind
+            and kwargs.get("interpolant") is None
+            and getattr(self, "track_ref", None) is None
+            and getattr(self, "fuel_model", None) is None
+        )
 
         # Grid-cost interpolants (bspline) need IPOPT's exact Hessian for
         # numerical stability. For string objective specs this is driven by
@@ -616,6 +641,9 @@ class Base:
                 "dt_min",
                 "dt_max",
                 "route_margin_m",
+                "physical_validation",
+                "initialization",
+                "initialization_phase_indices",
             }
         }
 
@@ -644,7 +672,27 @@ class Base:
         J_grid = 0  # Grid-cost accumulator, same quadrature, never rescaled
 
         state_guess = np.array(self.x_guess, dtype=float, copy=True)
-        if kwargs.get("initial_guess") is None:
+        default_seed = None
+        if (
+            kwargs.get("initial_guess") is None
+            and kwargs.get("initialization") == "auto"
+            and kwargs.get("initialization_phase_indices") is not None
+        ):
+            from ._initialization import build_full_flight_seed
+
+            default_seed = build_full_flight_seed(
+                self,
+                kwargs["initialization_phase_indices"],
+                collocation_roots=tuple(roots),
+                variable_timestep=variable_timestep,
+                dt_min=kwargs.get("dt_min"),
+                dt_max=kwargs.get("dt_max"),
+            )
+            state_guess = default_seed.X.T.copy()
+            ts_final_guess = float(default_seed.dts.sum())
+            self._opti.set_initial(self.ts_final, ts_final_guess)
+            self.initialization_diagnostics = default_seed.diagnostics
+        if kwargs.get("initial_guess") is None and default_seed is None:
             # Use the flight-duration seed instead of the generic six-hour grid.
             state_guess[:, 4] = np.linspace(
                 state_guess[0, 4], state_guess[0, 4] + ts_final_guess, self.nodes + 1
@@ -654,6 +702,9 @@ class Base:
         initial_flight = kwargs.get("initial_guess")
         control_guesses = {}
         supplied_dts = None
+        if default_seed is not None:
+            control_guesses = {j: default_seed.U[j] for j in range(3)}
+            supplied_dts = default_seed.dts
         if initial_flight is not None:
             for column, index, factor in (
                 ("mach", 0, 1.0),
@@ -727,7 +778,10 @@ class Base:
                 self._opti.subject_to(self._opti.bounded(self.x_lb, Xkj, self.x_ub))  # type: ignore[arg-type]  # CasADi stubs wrong
                 tau = roots[j]
                 self._opti.set_initial(
-                    Xkj, (1 - tau) * state_guess[k] + tau * state_guess[k + 1]
+                    Xkj,
+                    default_seed.Xc[k, :, j]
+                    if default_seed is not None
+                    else (1 - tau) * state_guess[k] + tau * state_guess[k + 1],
                 )
             Xc_store.append(Xc)
 
@@ -999,9 +1053,28 @@ class Base:
         nonphysical regions in both dynamics and objective integration.
         """
         if self.performance_model == "bada4":
-            self._opti.subject_to(-xdot[3] >= self.BADA4_MIN_FUELFLOW_KG_S)
+            fuel_row(self, xdot).constrain(self._opti)
+
+    def _effective_solver_options(self) -> dict[str, Any]:
+        """Return build-specific defaults without changing requested options."""
+        options = self.solver_options.copy()
+        if getattr(self, "_auto_expand", False):
+            options.setdefault("expand", True)
+        return options
 
     def _solve(self, X, U, **kwargs):
+        """Solve and validate the physical contract registered by the phase."""
+        options = resolve_validation(kwargs.get("physical_validation", True))
+        return solve_validated(self, lambda: self._solve_once(X, U, **kwargs), options)
+
+    def _reject_solution(self, status):
+        from ._path_validation import RejectedPhysicalSolution
+
+        self._last_solution = RejectedPhysicalSolution(self._last_solution, status)
+        if self.step_climb_diagnostics is not None:
+            self.step_climb_diagnostics.update(success=False, rejection_status=status)
+
+    def _solve_once(self, X, U, **kwargs):
         """Solve the Opti NLP and extract trajectory DataFrame.
 
         Args:
@@ -1012,7 +1085,8 @@ class Base:
         Returns:
             pd.DataFrame: Trajectory DataFrame.
         """
-        self._opti.solver("ipopt", self.solver_options)
+        self._last_solver_options = self._effective_solver_options()
+        self._opti.solver("ipopt", self._last_solver_options)
 
         try:
             sol = self._opti.solve()
@@ -1074,11 +1148,18 @@ class Base:
         drag_margin: float = 0.95,
         lift_drag_margin: float = 0.9,
     ) -> Any:
-        drag = self.drag.clean(mass, tas, alt, dT=self.dT)
-        opti.subject_to(thrust_max * drag_margin >= drag)
-        opti.subject_to(
-            thrust_max * lift_drag_margin >= self._lift_margin_drag(mass, tas, alt)
+        rows, drag = clean_rows(
+            self,
+            mass,
+            tas,
+            alt,
+            thrust_max,
+            drag_margin=drag_margin,
+            lift_drag_margin=lift_drag_margin,
+            buffer=getattr(self, "_physical_path_buffer", 0.0),
         )
+        for row in rows:
+            row.constrain(opti)
         return drag
 
     def _calc_emission(self, x, u, symbolic=True):
@@ -1246,11 +1327,7 @@ class Base:
         """
         from ._options import build_result
 
-        stats = (
-            dict(self._last_solution.stats())
-            if getattr(self, "_last_solution", None)
-            else {}
-        )
+        stats = dict(self.stats) if getattr(self, "_last_solution", None) else {}
         obj = (
             float(self.objective_value)
             if self.objective_value is not None
@@ -1262,7 +1339,7 @@ class Base:
         self,
         objective: str | Callable = "fuel",
         **kwargs: Any,
-    ) -> tuple[pd.DataFrame, list[dict]]:
+    ) -> tuple[pd.DataFrame | None, list[dict]]:
         from . import _multi_start
 
         return _multi_start.run_multi_start(self, objective, **kwargs)

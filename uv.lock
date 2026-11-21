@@ -2984,6 +2984,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pyproj" },
     { name = "scikit-learn" },
+    { name = "scipy" },
     { name = "xarray" },
 ]
 
@@ -3022,6 +3023,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=23.0" },
     { name = "pyproj", specifier = ">=3.7" },
     { name = "scikit-learn", specifier = ">=1.8" },
+    { name = "scipy", specifier = ">=1" },
     { name = "scipy", marker = "extra == 'replay'", specifier = ">=1" },
     { name = "traffic", marker = "extra == 'replay'", specifier = ">=2" },
     { name = "xarray", specifier = ">=2026.2" },

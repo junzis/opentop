@@ -108,7 +108,7 @@ def run_multi_start(
     optimizer: Any,
     objective: Union[str, Callable[..., Any]] = "fuel",
     **kwargs: Any,
-) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+) -> tuple[pd.DataFrame | None, list[dict[str, Any]]]:
     """Run N solves from different initial guesses and return the best.
 
     Takes the optimizer instance as explicit arg; no ``self`` coupling.
@@ -134,8 +134,8 @@ def run_multi_start(
     Returns:
         (trajectory, candidates):
             trajectory: the winning ``pd.DataFrame`` (feasible + lowest
-                objective, falling back to lowest objective among stalled
-                runs if none converged).
+                objective), or None if all candidates fail. Set return_failed=True
+                to retrieve the best diagnostic frame in that case.
             candidates: list of per-start dicts, best-first ordered.
                 Each dict has keys: start_index, objective, fuel,
                 grid_cost, grid_cost_exact, success, return_status, iters, perturbation,
@@ -153,10 +153,14 @@ def run_multi_start(
     altitude_jitter_ft = kwargs.pop("altitude_jitter_ft", 3000.0)
     mach_jitter = kwargs.pop("mach_jitter", 0.0)
     seed = kwargs.pop("seed", None)
+    return_failed = bool(kwargs.get("return_failed", False))
     trajectory_kwargs = dict(kwargs)
     # multi_start always returns DataFrames; strip the result_object flag if passed.
     trajectory_kwargs.pop("result_object", None)
     trajectory_kwargs["objective"] = objective
+    # Rejected candidates remain diagnostic frames for ranking and reseeding.
+    # Their wrapped solver status still reports success=False.
+    trajectory_kwargs["return_failed"] = True
 
     if n_starts < 1:
         raise ValueError(f"n_starts must be >= 1, got {n_starts}")
@@ -246,4 +250,6 @@ def run_multi_start(
     # the most recent solve; the winning stats are available in candidates[0].
     optimizer.objective_value = candidates[0]["objective"]
     optimizer.grid_cost_value = candidates[0]["grid_cost_exact"]
-    return candidates[0]["trajectory"], candidates
+    winner = candidates[0]
+    trajectory = winner["trajectory"] if winner["success"] or return_failed else None
+    return trajectory, candidates

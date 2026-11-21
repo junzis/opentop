@@ -12,6 +12,9 @@ from openap.aero import fpm, ft, kts
 import numpy as np
 import pandas as pd
 
+from ._continuous_step import ContinuousStepClimb, step_timestep_defaults
+from ._path_validation import PhysicalValidationOptions
+from ._physical_constraints import energy_row
 from ._step_climb import (
     SparseAscent,
     StepClimbOptions,
@@ -194,6 +197,7 @@ class CompleteFlight(Base):
         tol: float = 1e-6,
         acceptable_tol: float = 1e-4,
         ipopt_kwargs: dict[str, Any] | None = None,
+        expand: bool | None = None,
     ) -> None:
         """Configure complete-flight discretization and solver settings."""
         if nodes is None:
@@ -207,6 +211,7 @@ class CompleteFlight(Base):
             tol=tol,
             acceptable_tol=acceptable_tol,
             ipopt_kwargs=ipopt_kwargs,
+            expand=expand,
         )
 
     def _cruise_vertical_rate_limit(self) -> float:
@@ -233,6 +238,7 @@ class CompleteFlight(Base):
         h_max: float | None = None,
         return_failed: bool = False,
         initial_guess: pd.DataFrame | None = None,
+        initialization: str | None = None,
         remove_cruise: bool = False,
         interpolant: Any = None,
         n_dim: int | None = None,
@@ -248,6 +254,7 @@ class CompleteFlight(Base):
         variable_timestep: bool | None = None,
         dt_min: float | None = None,
         dt_max: float | None = None,
+        physical_validation: bool | PhysicalValidationOptions = True,
         result_object: bool = False,
         path_constraint_points: list[tuple[int, float]] | None = None,
         step_climb: bool | StepClimbOptions = False,
@@ -294,33 +301,62 @@ class CompleteFlight(Base):
                 peaks without changing the dynamics mesh. Default None keeps
                 boundary and collocation checks. Finite sampling does not
                 guarantee feasibility everywhere between the checked points.
-            step_climb: Search automatically generated level/climb schedules
-                within the cruise phase. True uses StepClimbOptions defaults:
-                sustained climbs >=500 fpm and level dwells >=300 s, including
-                before descent. Initial climb and final descent retain their
-                original limits. The local candidate search includes no steps,
-                can require many solves, and has no global-optimality guarantee.
-                Timing and continuous altitudes are optimized. Unless supplied,
-                variable_timestep=True, dt_min=30, and dt_max=900 are used.
-                objective_value is fuel; step_climb_penalty, step_climb_stats,
-                and step_climb_diagnostics describe the preference and search.
-                Requires objective="fuel". Default False preserves the original
-                formulation.
+            physical_validation: Audit the configured physical constraints at
+                161 points per interval and repair at most twice by default.
+                False explicitly disables this audit. Failure is returned only
+                as a diagnostic frame when return_failed=True.
+            step_climb: Optimize optional continuous cruise-climb pulses with
+                no minimum climb rate or penalty. Rates, timing, and altitudes
+                are free; level dwells and ramp durations remain constrained.
+                Initial climb and final descent keep their phase constraints.
+                Uses variable timesteps with route/mesh-aware default bounds.
+                One solve plus at most two physical repairs is the default;
+                there is no global-optimality guarantee. Explicit legacy
+                StepClimbOptions retain the older candidate search.
+                Requires objective="fuel". Default False.
+            initialization: None keeps the legacy ordinary-flight seed and
+                selects the coherent pulse seed for continuous step climbs.
+                Explicit "auto" opts into phase-based initialization and model
+                fuel integration; "legacy" forces the previous seed. Supplied
+                initial_guess data takes precedence over both policies.
+
 
         Returns:
             pd.DataFrame (or TrajectoryResult if result_object=True).
         """
         step_options = resolve_step_climb(step_climb)
+        if initialization is None:
+            initialization = (
+                "auto"
+                if step_options is not None and step_options.method == "continuous"
+                else "legacy"
+            )
+        if initialization not in {"auto", "legacy"}:
+            raise ValueError("initialization must be auto or legacy")
+        self.initialization_diagnostics = {
+            "method": "supplied" if initial_guess is not None else initialization
+        }
         validate_step_climb_objective(step_options, objective)
+        if (
+            step_options is not None
+            and step_options.method == "continuous"
+            and variable_timestep is False
+        ):
+            raise ValueError(
+                "continuous step_climb requires variable_timestep=True; "
+                "use method='legacy' for fixed interval times"
+            )
         if step_options is not None:
             variable_timestep = True if variable_timestep is None else variable_timestep
-            dt_min = 30.0 if dt_min is None else dt_min
-            dt_max = 900.0 if dt_max is None else dt_max
+            dt_min, dt_max = step_timestep_defaults(
+                self, dt_min, dt_max, method=step_options.method
+            )
         waypoints, waypoint_node_indices = self._filter_waypoints(
             waypoints, waypoint_node_indices, waypoint_min_spacing_m
         )
         _kwargs = {
             "initial_guess": initial_guess,
+            "physical_validation": physical_validation,
             "interpolant": interpolant,
             "n_dim": n_dim,
             "time_dependent": time_dependent,
@@ -350,10 +386,23 @@ class CompleteFlight(Base):
         if initial_guess is not None:
             self.x_guess = self.initial_guess(initial_guess)
 
+        _kwargs["initialization"] = initialization
+        _kwargs["initialization_phase_indices"] = self._phase_node_indices(
+            **phase_kwargs
+        )
         customized_max_fuel = max_fuel
 
         X, U = self._build_opti(objective, ts_final_guess=7200, **_kwargs)
         opti = self._opti
+        self._last_transcription.physical_contract = "full"
+        if step_options is not None and step_options.method == "continuous":
+            self._auto_expand = (
+                self.performance_model == "openap"
+                and (self.wind is None or self._auto_expand)
+                and interpolant is None
+                and getattr(self, "track_ref", None) is None
+                and self.fuel_model is None
+            )
 
         # --- Phase-specific constraints ---
 
@@ -402,8 +451,14 @@ class CompleteFlight(Base):
             drag = self._constrain_clean_performance(opti, mass, tas, alt, thrust_max)
 
             # Excess energy > change in potential energy
-            excess_energy = (thrust_max - drag) * v - mass * oc.aero.g0 * control[1]
-            opti.subject_to(excess_energy >= 0)
+            energy_row(
+                thrust_max,
+                drag,
+                v,
+                mass,
+                control[1],
+                buffer=getattr(self, "_physical_path_buffer", 0.0),
+            ).constrain(opti)
 
         # ts and dt consistency
         for k in range(self.nodes):
@@ -458,17 +513,21 @@ class CompleteFlight(Base):
         if step_options is None:
             df = self._solve(X, U, **_kwargs)
         else:
-            sparse_ascent = SparseAscent.add(
-                self._last_transcription, step_options, idx_toc, idx_tod
-            )
+            sparse_ascent = (
+                ContinuousStepClimb
+                if step_options.method == "continuous"
+                else SparseAscent
+            ).add(self._last_transcription, step_options, idx_toc, idx_tod)
             df = sparse_ascent.solve(self, **_kwargs)
         df_copy = df.copy()
 
         if not self._last_solution.stats()["success"]:
             warnings.warn("flight might be infeasible.")
+            df = None
 
-        if df.altitude.max() < 5000 and h_max is None:
+        if df is not None and df.altitude.max() < 5000 and h_max is None:
             warnings.warn("max altitude < 5000 ft, optimization seems to have failed.")
+            self._reject_solution("Trajectory_Altitude_Check_Failed")
             df = None
 
         if df is not None:
@@ -477,9 +536,11 @@ class CompleteFlight(Base):
                 warnings.warn(
                     "final mass condition violated (smaller than minimum mass)."
                 )
+                self._reject_solution("Trajectory_Minimum_Mass_Check_Failed")
                 df = None
             if final_mass > self.mlw + self.MASS_CONSTRAINT_TOL_KG:
                 warnings.warn("final mass condition violated (larger than MLW).")
+                self._reject_solution("Trajectory_Landing_Mass_Check_Failed")
                 df = None
 
         if return_failed:

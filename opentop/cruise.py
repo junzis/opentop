@@ -11,6 +11,9 @@ from openap.aero import fpm, ft, kts
 import numpy as np
 import pandas as pd
 
+from ._continuous_step import ContinuousStepClimb, step_timestep_defaults
+from ._path_validation import PhysicalValidationOptions
+from ._physical_constraints import energy_row
 from ._step_climb import (
     SparseAscent,
     StepClimbOptions,
@@ -251,10 +254,20 @@ class Cruise(Base):
         """Add this cruise phase to an existing CasADi Opti stack."""
         step_options = resolve_step_climb(step_climb)
         validate_step_climb_objective(step_options, objective)
+        if (
+            step_options is not None
+            and step_options.method == "continuous"
+            and variable_timestep is False
+        ):
+            raise ValueError(
+                "continuous step_climb requires variable_timestep=True; "
+                "use method='legacy' for fixed interval times"
+            )
         if step_options is not None:
             variable_timestep = True if variable_timestep is None else variable_timestep
-            dt_min = 30.0 if dt_min is None else dt_min
-            dt_max = 900.0 if dt_max is None else dt_max
+            dt_min, dt_max = step_timestep_defaults(
+                self, dt_min, dt_max, method=step_options.method
+            )
         if step_options is not None and not minimize:
             raise ValueError("step_climb requires a single-aircraft trajectory solve")
         if step_options is not None and self.allow_descent:
@@ -299,6 +312,15 @@ class Cruise(Base):
             **kwargs,
         )
         X, U = transcription.X, transcription.U
+        transcription.physical_contract = "cruise_step" if step_options else "cruise"
+        if step_options is not None and step_options.method == "continuous":
+            self._auto_expand = (
+                self.performance_model == "openap"
+                and (self.wind is None or self._auto_expand)
+                and interpolant is None
+                and getattr(self, "track_ref", None) is None
+                and self.fuel_model is None
+            )
         if self.track_ref is not None and initial_guess is None:
             x_ref, y_ref, length = self.track_ref
             progress = np.linspace(0, length, self.nodes + 1)
@@ -328,9 +350,14 @@ class Cruise(Base):
                 opti, state[3], tas, alt, thrust_max
             )
             if step_options is not None:
-                opti.subject_to(
-                    (thrust_max - drag) * v - state[3] * oc.aero.g0 * control[1] >= 0
-                )
+                energy_row(
+                    thrust_max,
+                    drag,
+                    v,
+                    state[3],
+                    control[1],
+                    buffer=getattr(self, "_physical_path_buffer", 0.0),
+                ).constrain(opti)
 
         # ts and dt consistency
         for k in range(self.nodes):
@@ -391,7 +418,11 @@ class Cruise(Base):
             opti.subject_to(X[0][3] - X[-1][3] <= max_fuel)
 
         self._step_climb_formulation = (
-            SparseAscent.add(transcription, step_options, 0, self.nodes)
+            (
+                ContinuousStepClimb
+                if step_options.method == "continuous"
+                else SparseAscent
+            ).add(transcription, step_options, 0, self.nodes)
             if step_options is not None
             else None
         )
@@ -420,6 +451,7 @@ class Cruise(Base):
         dt_min: float | None = None,
         dt_max: float | None = None,
         route_margin_m: float = 10_000.0,
+        physical_validation: bool | PhysicalValidationOptions = True,
         result_object: bool = False,
         step_climb: bool | StepClimbOptions = False,
     ) -> pd.DataFrame | TrajectoryResult:
@@ -460,17 +492,20 @@ class Cruise(Base):
                 Defaults to 10,000 meters.
             result_object: If True, return a TrajectoryResult instead of a
                 DataFrame. Default False.
-            step_climb: Search automatically generated level/climb schedules.
-                True uses StepClimbOptions defaults: sustained climbs >=500 fpm,
-                level dwells >=300 s, and continuous acceleration-limited ramps.
-                The local candidate search includes no steps and can require
-                many solves; it does not guarantee a global optimum. Timing and
-                continuous altitudes are optimized. Unless explicitly supplied,
-                variable_timestep=True, dt_min=30, and dt_max=900 are used.
-                objective_value is fuel; step_climb_penalty, step_climb_stats,
-                and step_climb_diagnostics describe the separate preference and
-                search. Requires objective="fuel". Default False preserves the
-                original formulation.
+            physical_validation: Audit the configured physical constraints at
+                161 points per interval and repair at most twice by default.
+                False explicitly disables this audit. Failure is returned only
+                as a diagnostic frame when return_failed=True.
+            step_climb: Optimize optional continuous cruise-climb pulses with
+                no minimum climb rate or penalty. Rates, timing, and altitudes
+                are free; level dwells and ramp durations remain constrained.
+                Initial climb and final descent keep their phase constraints.
+                Uses variable timesteps with route/mesh-aware default bounds.
+                One solve plus at most two physical repairs is the default;
+                there is no global-optimality guarantee. Explicit legacy
+                StepClimbOptions retain the older candidate search.
+                Requires objective="fuel". Default False.
+
 
         Returns:
             pd.DataFrame (or TrajectoryResult if result_object=True).
@@ -478,12 +513,15 @@ class Cruise(Base):
         waypoints, waypoint_node_indices = self._filter_waypoints(
             waypoints, waypoint_node_indices, waypoint_min_spacing_m
         )
-        if resolve_step_climb(step_climb) is not None:
+        step_options = resolve_step_climb(step_climb)
+        if step_options is not None:
             variable_timestep = True if variable_timestep is None else variable_timestep
-            dt_min = 30.0 if dt_min is None else dt_min
-            dt_max = 900.0 if dt_max is None else dt_max
+            dt_min, dt_max = step_timestep_defaults(
+                self, dt_min, dt_max, method=step_options.method
+            )
         solve_kwargs = {
             "initial_guess": initial_guess,
+            "physical_validation": physical_validation,
             "interpolant": interpolant,
             "n_dim": n_dim,
             "time_dependent": time_dependent,
@@ -538,9 +576,16 @@ class Cruise(Base):
 
         if not self._last_solution.stats()["success"]:
             warnings.warn("flight might be infeasible.")
+            df = None
 
-        if df.altitude.max() < 5000 and h_max is None and self.h_max is None:
+        if (
+            df is not None
+            and df.altitude.max() < 5000
+            and h_max is None
+            and self.h_max is None
+        ):
             warnings.warn("max altitude < 5000 ft, optimization seems to have failed.")
+            self._reject_solution("Trajectory_Altitude_Check_Failed")
             df = None
 
         if df is not None:
@@ -549,6 +594,7 @@ class Cruise(Base):
                 warnings.warn(
                     "final mass condition violated (smaller than minimum mass)."
                 )
+                self._reject_solution("Trajectory_Minimum_Mass_Check_Failed")
                 df = None
 
         if return_failed:

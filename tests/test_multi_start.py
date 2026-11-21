@@ -214,7 +214,7 @@ class TestMultiStartSingle:
         # winning candidate's trajectory field.
         assert trajectory is c["trajectory"]
         assert trajectory is fake_optimizer.solved
-        assert fake_optimizer.calls == [{"objective": "fuel"}]
+        assert fake_optimizer.calls == [{"objective": "fuel", "return_failed": True}]
 
     def test_n_starts_one_forwards_initial_guess_to_trajectory(self, fake_optimizer):
         guess = _make_canonical_df()
@@ -526,3 +526,40 @@ class TestMultiStartMach:
             np.testing.assert_allclose(guesses[i], expected)
             np.testing.assert_array_equal(guesses[i], guesses[i + 3])
         assert not np.array_equal(guesses[0], guesses[1])
+
+
+@pytest.mark.parametrize("all_failed", [False, True])
+@pytest.mark.parametrize("return_failed", [False, True])
+def test_rejected_candidates_keep_diagnostics_and_never_outrank_success(
+    fake_optimizer, all_failed, return_failed
+):
+    calls = []
+
+    def trajectory(**kwargs):
+        assert kwargs["return_failed"] is True
+        calls.append(kwargs)
+        accepted = len(calls) == 2 and not all_failed
+        fake_optimizer.objective_value = 200 if accepted else 100
+        fake_optimizer._last_solution = SimpleNamespace(
+            stats=lambda: {
+                "success": accepted,
+                "return_status": "Solve_Succeeded"
+                if accepted
+                else "Physical_Validation_failed",
+                "iter_count": 2,
+            }
+        )
+        return fake_optimizer.solved.copy()
+
+    fake_optimizer.trajectory = trajectory
+    frame, candidates = run_multi_start(
+        fake_optimizer,
+        n_starts=2,
+        return_failed=return_failed,
+        lateral_jitter_km=0,
+        altitude_jitter_ft=0,
+    )
+    assert len(calls) == 2
+    assert candidates[0]["success"] is (not all_failed)
+    assert (frame is None) is (all_failed and not return_failed)
+    assert all(isinstance(c["trajectory"], pd.DataFrame) for c in candidates)

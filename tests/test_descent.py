@@ -1,5 +1,7 @@
 """Tests for the Descent trajectory optimizer."""
 
+from types import SimpleNamespace
+
 import casadi as ca
 import pytest
 
@@ -112,6 +114,7 @@ def test_remove_cruise_filters_threshold(monkeypatch, remove_cruise):
         }
     )
     monkeypatch.setattr(opt, "_solve", lambda *args, **kwargs: solved)
+    opt._last_solution = SimpleNamespace(stats=lambda: {"success": True})
     result = opt.trajectory(df_cruise=cruise, remove_cruise=remove_cruise)
     expected = solved.iloc[[0]] if remove_cruise else solved
     pd.testing.assert_frame_equal(result, expected)

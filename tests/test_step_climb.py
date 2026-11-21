@@ -18,11 +18,11 @@ from opentop._transcription import AircraftTranscription
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"penalty_weight": 0},
+        {"penalty_weight": -1},
         {"penalty_weight": float("nan")},
         {"max_climb_rate_fpm": -1},
         {"activation_rate_fpm": float("inf")},
-        {"activation_rate_fpm": 1500},
+        {"method": "legacy", "min_climb_rate_fpm": 500, "activation_rate_fpm": 1500},
         {"min_climb_rate_fpm": 1600},
         {"min_level_duration_s": 0},
         {"max_transition_duration_s": -1},
@@ -59,7 +59,14 @@ def test_sparse_ascent_integrates_duration_and_prefers_concentrated_climb():
         objective_kwargs={},
         collocation_roots=(),
     )
-    preference = SparseAscent.add(transcription, top.StepClimbOptions(), 0, 4)
+    preference = SparseAscent.add(
+        transcription,
+        top.StepClimbOptions(
+            method="legacy", min_climb_rate_fpm=500, penalty_weight=0.01
+        ),
+        0,
+        4,
+    )
     evaluate = ca.Function("active_time", [opti.x, opti.p], [preference.active_time])
     parameter_values = opti.debug.value(opti.p, opti.initial())
 
@@ -89,8 +96,8 @@ def test_short_cruise_can_choose_no_steps_and_reports_physical_fuel():
     frame = cast(pd.DataFrame, optimizer.trajectory(step_climb=True))
 
     assert optimizer.success, optimizer.stats
-    assert len(optimizer.step_climb_stats) >= 5
-    assert all(stage["success"] for stage in optimizer.step_climb_stats)
+    assert 1 <= len(optimizer.step_climb_stats) <= 3
+    assert all(stage["solver_success"] for stage in optimizer.step_climb_stats)
     assert frame.vertical_rate.abs().max() < 1
     assert frame.altitude.max() - frame.altitude.min() < 10
     assert optimizer.step_climb_penalty is not None
@@ -137,7 +144,7 @@ def test_long_cruise_discovers_sustained_climbs_between_level_dwells():
     assert diagnostics["path_audit"]["success"]
     controls = optimizer.U[1] / fpm
     active = diagnostics["activation"] > 0.5
-    assert controls[active].min() >= 500 - 0.01
+    assert controls[active].min() > 0
     assert np.abs(controls[~active]).max() <= 0.01
     assert optimizer.objective_value == pytest.approx(
         frame.mass.iloc[0] - frame.mass.iloc[-1], rel=1e-7
@@ -165,7 +172,11 @@ def test_rejected_path_audit_propagates_to_public_result(monkeypatch):
     optimizer.fix_cruise_altitude()
     with pytest.warns(UserWarning, match="flight might be infeasible"):
         result = optimizer.trajectory(
-            step_climb=True, result_object=True, return_failed=True
+            step_climb=top.StepClimbOptions(
+                method="legacy", min_climb_rate_fpm=500, penalty_weight=0.01
+            ),
+            result_object=True,
+            return_failed=True,
         )
     assert not optimizer.success
     assert not result.success
@@ -210,7 +221,15 @@ def test_candidate_selection_restores_winner_and_reports_rejected_audit(
     )
 
     preference = SparseAscent.add(
-        transcription, top.StepClimbOptions(min_level_duration_s=100), 0, 5
+        transcription,
+        top.StepClimbOptions(
+            method="legacy",
+            min_climb_rate_fpm=500,
+            penalty_weight=0.01,
+            min_level_duration_s=100,
+        ),
+        0,
+        5,
     )
     initial = opti.solve()
     candidate_calls = []
@@ -222,7 +241,7 @@ def test_candidate_selection_restores_winner_and_reports_rejected_audit(
         def __init__(self):
             self.step_climb_stats = []
 
-        def _solve(self, X, U, **kwargs):
+        def _solve_once(self, X, U, **kwargs):
             self._last_solution = opti.solve()
             mode = np.asarray(opti.debug.value(preference.mode, opti.initial()))
             softness = float(opti.debug.value(preference.softness, opti.initial()))

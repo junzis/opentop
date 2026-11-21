@@ -19,6 +19,7 @@ dependencies = [
     "casadi>=3.7",
     "pyproj>=3.7",
     "scikit-learn>=1.8",
+    "scipy>=1",
     "cartopy>=0.25",
     "xarray>=2026.2",
     "click>=8.3",

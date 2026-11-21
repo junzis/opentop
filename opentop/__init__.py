@@ -1,6 +1,7 @@
 from importlib.metadata import version
 
 from . import rad, tools, vis
+from ._path_validation import PhysicalValidationOptions
 from ._step_climb import StepClimbOptions
 from .base import Base
 from .climb import Climb
@@ -38,6 +39,7 @@ __all__ = [
     "MultiAircraftResult",
     "OptimizedRouteOption",
     "PairSeparationReport",
+    "PhysicalValidationOptions",
     "PhysicsCorrectedFuelFlow",
     "RouteChoiceResult",
     "RouteNetwork",

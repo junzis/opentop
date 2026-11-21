@@ -19,35 +19,40 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class StepClimbOptions:
-    """Options for a bounded local search over step-climb schedules.
+    """Optional cruise-climb pulses with optimized rates and switching times.
 
-    A sparse-ascent reference discovers candidate climb locations. The search
-    compares no climb, the strongest one/two/three detected pulses, and all
-    detected pulses, polishing each with exact nodal climb-rate bounds.
-    Step count, timing, and continuous altitudes are selected automatically;
-    this is a local candidate search, not a global mixed-integer optimizer.
+    The default continuous method minimizes fuel with up to ``max_steps``
+    optional pulses (currently capped at three by the basis). Each pulse has
+    a constant-rate hold and acceleration-limited entry/exit ramps. Its rate
+    may be zero; there is no minimum climb rate or preference penalty.
+    Level blocks last at least ``min_level_duration_s``. Inactive slots still
+    reserve their ramp and dwell intervals. This is a local smooth NLP, not
+    a global search over step counts or mesh allocations.
 
-    Sustained climb intervals respect ``min_climb_rate_fpm`` (up to 0.01 fpm
-    numerical tolerance); continuous entry/exit ramps pass through lower rates
-    under the original acceleration limit. Climbing candidates must have level
-    dwells of at least ``min_level_duration_s`` before, between, and after steps.
-    The no-step candidate has no minimum dwell-duration requirement.
-
-    The fuel penalty is ``penalty_weight * reference_fuel / reference_seconds``
-    times active seconds plus one minimum-rate ramp duration per mode change.
-    ``activation_rate_fpm`` only shapes the sparse reference initialization.
-    Only the built-in ``"fuel"`` objective is supported. Actual fuel and this
-    additional preference are reported separately. No step is required.
+    ``method="legacy"`` retains sparse-ascent discovery and candidate search.
+    It requires an explicit positive ``min_climb_rate_fpm``; for the former
+    policy also set ``penalty_weight=0.01``. ``activation_rate_fpm`` applies
+    only to that method. Both methods support the built-in fuel objective.
     """
 
-    penalty_weight: float = 0.01
-    min_climb_rate_fpm: float = 500.0
+    penalty_weight: float = 0.0
+    min_climb_rate_fpm: float = 0.0
     max_climb_rate_fpm: float = 1500.0
     activation_rate_fpm: float = 30.0
     min_level_duration_s: float = 300.0
     max_transition_duration_s: float = 300.0
+    method: str = "continuous"
+    max_steps: int = 3
 
     def __post_init__(self) -> None:
+        if self.method not in {"continuous", "legacy"}:
+            raise ValueError("step-climb method must be continuous or legacy")
+        if (
+            isinstance(self.max_steps, bool)
+            or not isinstance(self.max_steps, int)
+            or self.max_steps < 0
+        ):
+            raise ValueError("step-climb max_steps must be a nonnegative integer")
         for name in (
             "penalty_weight",
             "max_climb_rate_fpm",
@@ -57,9 +62,29 @@ class StepClimbOptions:
             "max_transition_duration_s",
         ):
             value = getattr(self, name)
-            if not isfinite(value) or value <= 0:
+            lower_ok = (
+                value >= 0
+                if name in {"penalty_weight", "min_climb_rate_fpm"}
+                else value > 0
+            )
+            if not isfinite(value) or not lower_ok:
                 raise ValueError(f"step-climb {name} must be finite and positive")
-        if self.activation_rate_fpm >= self.max_climb_rate_fpm:
+        if self.method == "continuous" and (
+            self.min_climb_rate_fpm or self.penalty_weight
+        ):
+            raise ValueError(
+                "continuous step-climb uses no minimum rate or penalty; "
+                "use method='legacy' for those options"
+            )
+        if self.method == "legacy" and self.min_climb_rate_fpm <= 0:
+            raise ValueError(
+                "legacy step-climb requires an explicit positive "
+                "min_climb_rate_fpm (for example 500)"
+            )
+        if (
+            self.method == "legacy"
+            and self.activation_rate_fpm >= self.max_climb_rate_fpm
+        ):
             raise ValueError(
                 "step-climb activation_rate_fpm must be below max_climb_rate_fpm"
             )
@@ -175,7 +200,35 @@ class SparseAscent:
         optimizer.solver_options[hessian_key] = "exact"
         started = perf_counter()
         try:
-            return self._solve_stages(optimizer, **kwargs)
+            frame = self._solve_stages(optimizer, **kwargs)
+            from ._path_validation import (
+                PhysicalAudit,
+                RejectedPhysicalSolution,
+                resolve_validation,
+            )
+
+            validation = resolve_validation(kwargs.get("physical_validation", True))
+            report = dict(
+                enabled=validation.enabled,
+                method="legacy_final_audit",
+                success=None,
+                solves=len(optimizer.step_climb_stats),
+            )
+            if optimizer.success and validation.enabled:
+                audit, _ = PhysicalAudit(
+                    self.transcription, validation.points_per_interval
+                ).audit(optimizer._last_solution)
+                report.update(audit)
+                if not audit["success"]:
+                    optimizer._last_solution = RejectedPhysicalSolution(
+                        optimizer._last_solution,
+                        "Physical_Validation_legacy_final_audit_failed",
+                    )
+            optimizer.physical_validation_diagnostics = report
+            if optimizer.step_climb_diagnostics is not None:
+                optimizer.step_climb_diagnostics["success"] = optimizer.success
+                optimizer.step_climb_diagnostics["final_physical_validation"] = report
+            return frame
         finally:
             if optimizer.step_climb_diagnostics is None:
                 optimizer.step_climb_diagnostics = {"success": False}
@@ -193,7 +246,7 @@ class SparseAscent:
         opti = transcription.opti
         optimizer.step_climb_stats = []
         started = perf_counter()
-        frame = optimizer._solve(transcription.X, transcription.U, **kwargs)
+        frame = optimizer._solve_once(transcription.X, transcription.U, **kwargs)
         solution = optimizer._last_solution
         optimizer.step_climb_stats.append(
             dict(solution.stats(), stage="reference", seconds=perf_counter() - started)
@@ -218,7 +271,7 @@ class SparseAscent:
             opti.set_value(self.activation, activation)
             previous_solution = solution
             started = perf_counter()
-            frame = optimizer._solve(transcription.X, transcription.U, **kwargs)
+            frame = optimizer._solve_once(transcription.X, transcription.U, **kwargs)
             solution = optimizer._last_solution
             optimizer.step_climb_stats.append(
                 dict(solution.stats(), stage="sparse", seconds=perf_counter() - started)
@@ -297,7 +350,7 @@ class SparseAscent:
             for stage_index, softness in enumerate(stages):
                 opti.set_value(self.softness, softness)
                 started = perf_counter()
-                optimizer._solve(transcription.X, transcription.U, **kwargs)
+                optimizer._solve_once(transcription.X, transcription.U, **kwargs)
                 solution = optimizer._last_solution
                 stats = dict(solution.stats())
                 stats.update(
@@ -579,7 +632,7 @@ def refine_performance(optimizer: Any, solution: Any, **kwargs: Any):
         added += len(violating)
         opti.set_initial(opti.x, solution.value(opti.x))
         started = perf_counter()
-        optimizer._solve(transcription.X, transcription.U, **kwargs)
+        optimizer._solve_once(transcription.X, transcription.U, **kwargs)
         solution = optimizer._last_solution
         optimizer.step_climb_stats.append(
             dict(

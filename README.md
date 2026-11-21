@@ -171,111 +171,89 @@ Check `opt.success` after solving. `follow_track` cannot be combined with
 
 ### Optimizer-selected step climbs
 
-`Cruise` and `CompleteFlight` offer an optional local step-climb search for the
+`Cruise` and `CompleteFlight` support continuous cruise-climb pulses for the
 built-in fuel objective:
 
 ```python
 opt = opentop.CompleteFlight("A320", "EHAM", "LGAV", m0=70_000)
 opt.setup(nodes=40)
-
-# Optional tuning; step_climb=True uses these defaults.
-# Rates are in ft/min and durations in seconds.
-options = opentop.StepClimbOptions(
-    min_climb_rate_fpm=500,
-    max_climb_rate_fpm=1500,
-    min_level_duration_s=300,
-    max_transition_duration_s=300,
-    penalty_weight=0.01,
-)
-result = opt.trajectory(step_climb=options, result_object=True)
+result = opt.trajectory(step_climb=True, result_object=True)
 if not result.success:
     raise RuntimeError(result.status)
 flight = result.df
 ```
 
-The search generates candidate schedules from a sparse-ascent optimization,
-compares no steps, the strongest one/two/three detected ascent pulses, and all
-detected pulses, then selects the best feasible fuel-plus-preference result.
-Locations, step count, timing, and continuous altitudes are selected by this
-bounded local search. Flight levels are not rounded to an ATC allocation, and
-the search does not guarantee a global optimum or that every route needs steps.
-Initialization, mesh size, and options can change the selected schedule.
+The optimizer chooses pulse rates, interval durations, and continuous altitudes
+in one smooth NLP. Rates range from zero to 1,500 ft/min: there is no mandatory
+500 ft/min rate, minimum step height, or climb penalty. Zero amplitude removes
+a pulse. The mesh and initialization choose a basis of up to three optional
+pulses; this is not a global search over every step count or node allocation.
+Inactive slots still reserve ramp and dwell intervals. Flight levels are not
+rounded to ATC allocations. Initial climb and final descent keep their original
+phase constraints.
 
-Each discovered schedule is solved with direct nodal rate bounds: zero at level
-nodes and the configured climb-rate range at active nodes. Interval durations,
-climb rates, and altitudes remain optimization variables. A failed direct solve
-can retry with softened rate bounds, but only a final exact-bound solve can be
-accepted. No binary activation variables or routine mode-continuation solves
-are needed.
+`StepClimbOptions` controls the maximum rate, maximum number of slots (the basis
+currently supports at most three), level dwell (default 300 s), and ramp duration
+(default at most 300 s). Acceleration remains limited to 5 ft/min/s. If no pulse
+fits, the basis is level-only. Continuous steps require variable timesteps;
+explicit `variable_timestep=False` raises an error. Default interval bounds adapt
+to route length and mesh density: `dt_min=min(30, 0.25*nominal_duration/nodes)`
+with a small positive floor, and `dt_max=max(900, 2*nominal_duration/nodes)`.
+Explicit user bounds are retained. These are initialization heuristics, not
+prescribed switching times.
 
-Sustained climb intervals have rates between the configured bounds, within
-0.01 ft/min numerical tolerance. Continuous ramps pass through lower rates
-under the existing 5 ft/min/s acceleration limit; each ramp lasts at most
-`max_transition_duration_s`. Candidates with steps must have the configured
-level dwell before, between, and after climbs. The no-step candidate can be
-shorter. Complete flights retain their initial climb and final descent, with a
-level cruise interval before descent.
+`objective_value` reports physical fuel; `step_climb_penalty` is zero for the
+continuous method. `step_climb_stats` records solve attempts, and
+`step_climb_diagnostics` reports amplitudes, level/ramp durations, shape checks,
+physical audits, and total solve count. `opt.stats` retains the final solve's
+iteration count; validation diagnostics separately aggregate all attempts.
 
-Unless explicitly specified, this mode enables variable timesteps with
-`dt_min=30` and `dt_max=900`. Explicit `variable_timestep=False` and duration
-bounds are honored; coarse fixed meshes can make useful small steps impossible.
-With the defaults, two fastest 0--500 ft/min ramps and one 30-second sustained
-interval imply a minimum step height of about 1,083 ft. This is a consequence of
-the configured limits and mesh, not an independently established optimal step
-size.
-The default `step_climb=False` retains the existing formulation and timestep
-behavior. Wind, mass limits, and supplied altitude/RAD ceilings remain active.
+The previous sparse-ascent candidate search remains available explicitly:
 
-`opt.objective_value` reports physical fuel burn. `opt.step_climb_penalty` reports
-the additional fuel-equivalent preference separately. Its coefficient is
-`penalty_weight * reference_fuel / reference_duration`; it charges active climb
-time plus one minimum-rate ramp duration per mode change. The sparse reference
-uses `activation_rate_fpm` only to discover candidate locations.
-`opt.step_climb_stats` records each solve, including rejected candidates;
-`opt.step_climb_diagnostics` reports the selected candidate, level/climb/ramp
-durations, activation error, path audit, solve count, and total search time.
-`opt.stats` describes the selected solve, so its iterations or CPU limit do not
-represent the whole search. This mode can require many solves; IPOPT iteration
-and CPU limits apply to each solve. Long routes can take several minutes; a
-per-solve CPU limit does not cap the total search runtime.
+```python
+legacy = opentop.StepClimbOptions(
+    method="legacy", min_climb_rate_fpm=500, penalty_weight=0.01
+)
+```
 
-Performance checks include quarter-interval samples and an adaptive audit of
-81 points per interval, including initial climb and descent. Up to four rounds
-add constraints at missed thrust, lift, or energy peaks and their neighboring
-audit points. Accepted candidates
-must pass the sampled audit at a relative force/energy tolerance of `1e-7`;
-BADA4 fuel-domain checks also apply. This finite audit is not a continuous-path
-certificate. Check `opt.success` or use `result_object=True`; rejected mode or
-path audits report failure even if IPOPT itself terminated successfully.
+Legacy search can take many solves and retains its candidate-specific repair
+process. Its selected result receives a final strict audit; it is not repaired
+under a different candidate's mode parameters. Historical 8--16 minute search
+results refer to this older method, not the continuous default.
 
-A single fresh A320 EHAM--LGAV cruise comparison (70,000 kg, 30 intervals)
-reduced trajectory wall time from 482 to 404 seconds and solver calls from 31
-to 21 using direct bounds and neighboring-point refinement. All five candidate
-paths passed the configured audit in the new run. The selected result had two
-steps and used 7,326.810 kg fuel, compared with one step and 7,338.391 kg for
-the earlier formulation. These are different local search outcomes, not a
-comparison at an identical optimum. Runs used one numerical-library thread
-and partly overlapped; one trial does not establish a general speedup. The
-independent 161-point check still found a small -0.0179 N lift-margin residual.
+### Physical validation and initialization
 
-Before direct-bound polishing, development checks on an A320 EHAM--LGAV flight
-at 70,000 kg found one roughly 1,132 ft step with 30 cruise intervals (511
-seconds, 31 solves). A 40-interval
-complete flight, warm-started from an earlier automatic solution, selected three
-roughly 1,083 ft steps (934 seconds, 27 solves). Thus representative runs took
-about 8 minutes for cruise and 16 minutes for a complete flight. The complete
-flight passed the 81-point audit; an independent finer 161-point audit found
-small between-sample residuals of -0.0129 N in lift margin and -51.73 W in energy.
-Its lower-step-count candidates failed the bounded path audit, so that example
-does not establish a fuel benefit against a verified level-flight comparator.
-A BADA4 A320-214 cruise check on the same route and mass, using 30 intervals
-and an automatically optimized OpenAP trajectory only as a warm start, selected
-one roughly 1,209 ft step. Fuel was 6,327.590 kg versus 6,368.042 kg for its
-accepted no-step candidate. The 81-point audit passed; the finer 161-point check
-found a -0.002752 N lift-margin residual, with positive thrust/energy margins
-and fuel flow above its model floor. That search took 588 seconds and 15 solves;
-two later candidates hit their 60-second CPU caps. This validates a BADA4 cruise
-case, without establishing coverage of BADA4 complete-flight step climbs.
+Single-aircraft `CompleteFlight`, `Cruise`, `Climb`, and `Descent` validate their
+configured physical inequalities on 161 samples per interval. Missed peaks add
+constraints followed by at most two repair solves. The default therefore permits
+one initial solve and at most two repairs. Check `result.success` or `opt.success`:
+an exhausted repair budget reports failure even if IPOPT itself converged.
+`return_failed=True` returns a diagnostic trajectory without changing that status.
+
+```python
+checks = opentop.PhysicalValidationOptions(max_repairs=2)
+result = opt.trajectory(physical_validation=checks, result_object=True)
+```
+
+Force residuals are normalized by available thrust. BADA4 fuel-domain residuals
+retain kg/s units. Acceptance tolerance is `1e-7` in each reported unit; repair
+adds a `1e-4` dimensionless force buffer, never a kg/s fuel buffer. Climb preserves
+its interval-average acceleration/energy model. Ordinary Cruise retains its
+existing force guards; it does not silently acquire the step-cruise energy guard.
+Finite sampling is not a continuous-path certificate. The coupled `MultiAircraft`
+solver is outside this single-aircraft audit controller. Explicit
+`physical_validation=False` disables validation and is recorded as disabled.
+Climb/Descent preliminary cruise solves only prepare their target/seed and are
+counted separately from the requested phase's validation attempts.
+
+Ordinary complete flights retain their previous default seed. Explicit
+`initialization="auto"` opts into a bounded-control, phase-based
+altitude/rate profile with model fuel integration. A320 comparisons were similar
+or faster, but a B789 wind case entered a worse local basin, so this broader
+heuristic is not the ordinary default. It does not guarantee a feasible seed.
+Continuous step climbs use their matching pulse seed by default, without an
+extra optimization. `initialization="legacy"` forces the older seed; supplied
+`initial_guess` data takes precedence over either policy.
 
 ### Multiple-aircraft separation optimization
 
@@ -344,6 +322,13 @@ optimizer.enable_wind(windfield)
 flight = optimizer.trajectory(objective="fuel")
 opentop.vis.trajectory(flight, windfield=windfield, barb_steps=15)
 ```
+
+OpenAP fuel optimization with the built-in wind model automatically expands the
+CasADi graph before solving. This reduces derivative-evaluation cost without
+changing the equations. The automatic setting excludes custom objectives, grid
+costs, reference tracks, external fuel models and other performance models.
+Use `optimizer.setup(expand=False)` to disable expansion, or `expand=True` to
+request it explicitly. Other optimizations retain their existing default.
 
 ![example_optimal_flight](./docs/_static/optimal_flight_complete_example.png)
 
