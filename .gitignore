@@ -164,5 +164,7 @@ dmypy.json
 
 # Claude Code local config
 .claude/
+/.agents/
+/.codex/
 
 tests/fixtures/*.casadi.tmp
