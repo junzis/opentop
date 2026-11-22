@@ -183,8 +183,9 @@ if not result.success:
 flight = result.df
 ```
 
-The [step-climb notebook](examples/step_climb.ipynb) plots the steps selected
-for a full flight and a cruise-only flight and reports the runtime for each.
+The [step-climb notebook](examples/step_climb.ipynb) compares altitude and
+vertical rate with step climbs enabled and disabled for both a full flight
+and a cruise-only flight. It reports the runtime of each optimization.
 
 The optimizer chooses pulse rates, interval durations, and continuous altitudes
 in one smooth NLP. Rates range from zero to 1,500 ft/min: there is no mandatory
