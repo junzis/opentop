@@ -73,7 +73,7 @@ class TestClimb:
     def test_turn_rate_within_limit(self, climb_clipped_df):
         heading = np.unwrap(np.deg2rad(climb_clipped_df.heading.to_numpy()))
         turn_rate = np.diff(heading) / np.diff(climb_clipped_df.ts.to_numpy())
-        assert np.max(np.abs(turn_rate)) <= np.deg2rad(0.5) + 1e-6
+        assert np.max(np.abs(turn_rate)) <= top.Base.MAX_TURN_RATE + 1e-6
 
     def test_mass_decreases(self, climb_clipped_df):
         df = climb_clipped_df

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 class Base:
     BADA4_MIN_FUELFLOW_KG_S: ClassVar[float] = 0.05
     MASS_CONSTRAINT_TOL_KG: ClassVar[float] = 1e-3
-    MAX_TURN_RATE: ClassVar[float] = 0.5 * np.pi / 180
+    MAX_TURN_RATE: ClassVar[float] = 2 * np.pi / 180
     MAX_VERTICAL_ACCELERATION: ClassVar[float] = 5 * fpm
     VARIABLE_TIMESTEP_MIN_FACTOR: ClassVar[float] = 0.65
     VARIABLE_TIMESTEP_MAX_FACTOR: ClassVar[float] = 1.65

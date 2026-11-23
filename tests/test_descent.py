@@ -61,7 +61,7 @@ class TestDescent:
     def test_turn_rate_within_limit(self, descent_full_df):
         heading = np.unwrap(np.deg2rad(descent_full_df.heading.to_numpy()))
         turn_rate = np.diff(heading) / np.diff(descent_full_df.ts.to_numpy())
-        assert np.max(np.abs(turn_rate)) <= np.deg2rad(0.5) + 1e-6
+        assert np.max(np.abs(turn_rate)) <= top.Base.MAX_TURN_RATE + 1e-6
 
     def test_mass_decreases(self, descent_full_df):
         df = descent_full_df

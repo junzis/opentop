@@ -44,7 +44,7 @@ def test_replay_from_file_fuel(tmp_path):
                 "fuel",
                 "--no-wind",
                 "--max-iter",
-                "300",
+                "1000",
                 "-o",
                 str(out_dir),
             ],

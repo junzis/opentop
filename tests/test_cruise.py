@@ -63,7 +63,7 @@ class TestCruise:
     def test_turn_rate_within_limit(self, cruise_df):
         heading = np.unwrap(np.deg2rad(cruise_df.heading.to_numpy()))
         turn_rate = np.diff(heading) / np.diff(cruise_df.ts.to_numpy())
-        assert np.max(np.abs(turn_rate)) <= np.deg2rad(0.5) + 1e-6
+        assert np.max(np.abs(turn_rate)) <= top.Base.MAX_TURN_RATE + 1e-6
 
     def test_mass_decreases(self, cruise_df):
         assert cruise_df.mass.iloc[-1] < cruise_df.mass.iloc[0]
