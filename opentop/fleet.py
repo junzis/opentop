@@ -85,6 +85,17 @@ class MultiAircraftResult:
     verification_time_s: float
 
 
+def _locate(node_times: np.ndarray, relative_time: float) -> tuple[int, float]:
+    """Interval index and fraction in [0, 1] of a time on a node-time grid."""
+    nodes = len(node_times) - 1
+    k = int(
+        np.clip(np.searchsorted(node_times, relative_time, "right") - 1, 0, nodes - 1)
+    )
+    length = node_times[k + 1] - node_times[k]
+    tau = (relative_time - node_times[k]) / length if length > 0 else 0.0
+    return k, float(min(max(tau, 0.0), 1.0))
+
+
 def _common_projection_center(flights: tuple[FlightSpec, ...]) -> tuple[float, float]:
     vectors = []
     for flight in flights:
@@ -195,10 +206,6 @@ class MultiAircraft:
             options = dict(flight.options)
             if "initial_guess" in options:
                 raise ValueError("set initial_guess on FlightSpec, not in options")
-            if options.get("variable_timestep", False):
-                raise NotImplementedError(
-                    "MultiAircraft currently requires uniform timesteps"
-                )
             if options.get("interpolant") is not None and options.get(
                 "time_dependent", False
             ):
@@ -281,11 +288,10 @@ class MultiAircraft:
         trajectories = {}
         for index, flight in enumerate(self.flights):
             options = dict(flight.options)
-            # Fleet-time interpolation currently assumes equal interval
-            # durations. Waypoint-constrained warm starts must use that same
-            # uniform grid even though phase optimizers normally enable
-            # variable timesteps automatically when waypoints are present.
-            options["variable_timestep"] = False
+            # Warm starts use the joint problem's time grid: uniform unless the
+            # flight requests variable timesteps, even though phase optimizers
+            # enable them automatically when waypoints are present.
+            options["variable_timestep"] = bool(options.get("variable_timestep", False))
             if isinstance(flight.optimizer, Cruise):
                 df = flight.optimizer.trajectory(
                     objective=flight.objective,
@@ -447,7 +453,7 @@ class MultiAircraft:
         for index, flight in enumerate(self.flights):
             options = dict(flight.options)
             options.update(flight.joint_options)
-            options.pop("variable_timestep", None)
+            variable_timestep = bool(options.pop("variable_timestep", False))
             options.pop("remove_cruise", None)
             options.setdefault(
                 "route_margin_m", max(50_000.0, 4 * self.separation.horizontal_m)
@@ -457,7 +463,7 @@ class MultiAircraft:
                 opti,
                 flight.objective,
                 initial_guess=references[index],
-                variable_timestep=False,
+                variable_timestep=variable_timestep,
                 name_prefix=f"aircraft_{index}_{flight.id}_r{refinement}",
                 minimize=False,
                 **options,
@@ -516,34 +522,36 @@ class MultiAircraft:
             second = transcriptions[j]
             reference_i = references[i]
             reference_j = references[j]
-            duration_i = float(reference_i.ts.iloc[-1] - reference_i.ts.iloc[0])
-            duration_j = float(reference_j.ts.iloc[-1] - reference_j.ts.iloc[0])
-            if duration_i <= 0 or duration_j <= 0:
+            ts_i = reference_i.ts.to_numpy(dtype=float) - reference_i.ts.iloc[0]
+            ts_j = reference_j.ts.to_numpy(dtype=float) - reference_j.ts.iloc[0]
+            if ts_i[-1] <= 0 or ts_j[-1] <= 0:
                 continue
+            # References with removed level-off rows no longer have one row
+            # per node; locate on equal intervals then, as before.
+            if len(ts_i) != first.optimizer.nodes + 1:
+                ts_i = np.linspace(0.0, ts_i[-1], first.optimizer.nodes + 1)
+            if len(ts_j) != second.optimizer.nodes + 1:
+                ts_j = np.linspace(0.0, ts_j[-1], second.optimizer.nodes + 1)
             for absolute_time in sorted(times):
-                progress_i = (
-                    (absolute_time - self.flights[i].start_time) / duration_i
-                ) * first.optimizer.nodes
-                progress_j = (
-                    (absolute_time - self.flights[j].start_time) / duration_j
-                ) * second.optimizer.nodes
-                interval_i = min(
-                    max(int(np.floor(progress_i)), 0), first.optimizer.nodes - 1
+                interval_i, tau_i = _locate(
+                    ts_i, absolute_time - self.flights[i].start_time
                 )
-                interval_j = min(
-                    max(int(np.floor(progress_j)), 0), second.optimizer.nodes - 1
+                interval_j, _ = _locate(
+                    ts_j, absolute_time - self.flights[j].start_time
                 )
                 # Anchor the physical encounter time to aircraft i. This keeps
                 # the expression compact while allowing aircraft j's free
-                # duration to shift its progress through the encounter.
-                tau_i = min(max(progress_i - interval_i, 0.0), 1.0)
+                # duration (and interval durations) to shift its progress
+                # through the encounter. The time state X[k][4] is the start of
+                # interval k, so this holds for uniform and variable timesteps.
                 symbolic_time = (
                     self.flights[i].start_time
-                    + (interval_i + tau_i) * first.ts_final / first.optimizer.nodes
+                    + first.X[interval_i][4]
+                    + tau_i * first.interval_dts[interval_i]
                 )
-                tau_j = (symbolic_time - self.flights[j].start_time) / (
-                    second.ts_final / second.optimizer.nodes
-                ) - interval_j
+                tau_j = (
+                    symbolic_time - self.flights[j].start_time - second.X[interval_j][4]
+                ) / second.interval_dts[interval_j]
                 opti.subject_to(opti.bounded(0.0, tau_j, 1.0))  # type: ignore[arg-type]
                 state_i = interpolate_collocation_state(
                     first.X[interval_i], first.Xc[interval_i], tau_i
@@ -653,11 +661,7 @@ class MultiAircraft:
         }
 
     def _state_at(self, numeric: dict[str, Any], relative_time: float) -> np.ndarray:
-        duration = numeric["duration"]
-        nodes = numeric["X"].shape[1] - 1
-        progress = min(max(relative_time / duration * nodes, 0.0), float(nodes))
-        interval = min(int(np.floor(progress)), nodes - 1)
-        tau = min(max(progress - interval, 0.0), 1.0)
+        interval, tau = _locate(numeric["X"][4] - numeric["X"][4][0], relative_time)
         return numeric_collocation_state(
             numeric["X"][:, interval], numeric["Xc"][interval], tau
         )
